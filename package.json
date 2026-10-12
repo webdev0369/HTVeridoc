@@ -1,0 +1,21 @@
+{
+  "name": "htveridoc",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "node scripts/free-dev-ports.js && pnpm --parallel --filter @htveridoc/api --filter @htveridoc/web dev",
+    "dev:api": "pnpm --filter @htveridoc/api dev",
+    "dev:web": "pnpm --filter @htveridoc/web dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "migration:run": "pnpm --filter @htveridoc/api migration:run",
+    "migration:generate": "pnpm --filter @htveridoc/api migration:generate",
+    "seed": "pnpm --filter @htveridoc/api seed",
+    "docker:up": "docker compose up --build -d",
+    "docker:down": "docker compose down",
+    "docker:logs": "docker compose logs -f"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
