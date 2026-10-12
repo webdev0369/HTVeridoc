@@ -1,0 +1,121 @@
+# HTVeridoc
+
+Document-processing platform (Phases 1–3): multi-tenant auth, PDF upload/storage, and a basic review shell.
+
+## Stack
+
+- **Web:** Next.js + TypeScript + Tailwind + TanStack Query + PDF.js
+- **API:** NestJS + TypeORM + PostgreSQL + Redis/BullMQ (connection only)
+- **Storage:** local filesystem under `storage/htveridoc`
+
+Docker is **not** required for local development. For a full stack deploy (API + web + Postgres + Redis + persistent PDF storage), use Docker Compose below.
+
+## Prerequisites
+
+- Node.js 20+
+- pnpm 9 (`corepack enable`)
+- PostgreSQL 14+ running locally **or** Docker Desktop / Docker Engine
+- Redis optional for Phases 1–3 (BullMQ is registered but idle; required later for jobs)
+
+## Setup
+
+```bash
+# From repo root
+cp .env.example .env
+# Edit DATABASE_URL to match your local Postgres credentials / JWT secrets
+```
+
+Create the database (Windows example with PostgreSQL installer):
+
+```powershell
+& "C:\Program Files\PostgreSQL\17\bin\psql.exe" -U postgres -f scripts/create-database.sql
+```
+
+Then:
+
+```bash
+pnpm install
+pnpm migration:run
+pnpm seed
+```
+
+## Run
+
+```bash
+pnpm dev:api   # http://localhost:3001
+pnpm dev:web   # http://localhost:3000
+# or both:
+pnpm dev
+```
+
+## Deploy with Docker (full system)
+
+Requires Docker Compose. This starts **Postgres**, **Redis**, **API** (runs migrations on boot), and **Web**, with a named volume for PDF storage.
+
+```bash
+cp .env.docker.example .env
+# Edit JWT secrets, POSTGRES_PASSWORD, GEMINI_API_KEY, and public URLs
+docker compose up --build -d
+```
+
+- Web: http://localhost:3000  
+- API: http://localhost:3001/health  
+
+`NEXT_PUBLIC_API_URL` and `CORS_ORIGIN` must be URLs the **browser** can reach (e.g. your VPS domain), not Docker service names. Rebuild the web image after changing `NEXT_PUBLIC_API_URL`.
+
+```bash
+pnpm docker:logs    # follow logs
+pnpm docker:down    # stop stack
+```
+
+On a VPS: install Docker, copy the repo, set `.env` with your public hostnames/HTTPS URLs, then `docker compose up --build -d`.
+
+## Smoke checklist
+
+1. Open http://localhost:3000/register and create an organization + admin user.
+2. Confirm `GET http://localhost:3001/health` returns `{ status: "ok" }`.
+3. Upload a PDF on **Documents**.
+4. Open the document and verify the PDF.js viewer renders pages.
+5. Confirm the file exists under `storage/htveridoc/organizations/{orgId}/documents/{docId}/original/document.pdf`.
+
+## API (Phases 1–3)
+
+| Method | Path | Notes |
+|--------|------|--------|
+| POST | `/auth/register` | Creates org + ADMIN user |
+| POST | `/auth/login` | JWT access + refresh |
+| POST | `/auth/refresh` | Rotate refresh token |
+| POST | `/auth/logout` | Revoke refresh token |
+| GET | `/auth/me` | Current user + orgs |
+| GET | `/organizations/current` | Active org |
+| GET | `/users` | Org members |
+| POST | `/documents` | multipart `file` PDF |
+| GET | `/documents` | Paginated list |
+| GET | `/documents/:id` | Metadata |
+| GET | `/documents/:id/file` | Authenticated PDF stream |
+| DELETE | `/documents/:id` | Soft-delete |
+| POST | `/documents/:id/process` | Enqueue Gemini extraction (`ai-extraction` queue) |
+| GET | `/documents/:id/extraction` | Latest extraction result |
+| GET | `/ai/requests` | AI token/cost tracking |
+
+### Phase 4 — Gemini
+
+1. Set `GEMINI_API_KEY` in `.env` (model defaults to `gemini-3-flash-preview`).
+2. Redis: BullMQ needs Redis **5+**. Older Windows Redis (e.g. 3.x) is auto-detected and extraction falls back to **inline** mode.
+3. Run `pnpm migration:run` (creates `extractions` + `ai_requests`).
+4. Open a document → **Extract with Gemini** → watch status move to `EXTRACTED` and review JSON.
+
+### Phase 5 — PO confirmation structured extraction
+
+- Prompt/schema **v1.1.0** for full header + line items (fees/cancelled preserved)
+- Tables: `extraction_fields`, `extraction_line_items`, `extraction_sources`
+- `GET /documents/:id/extraction` returns `fields`, `lineItems`, and `summary`
+- Reprocess existing documents after `pnpm migration:run` to populate structured rows
+
+## Storage layout
+
+```text
+storage/htveridoc/organizations/{organizationId}/documents/{documentId}/original/document.pdf
+```
+
+PDFs are never served from a public web root; only via authenticated NestJS endpoints.
