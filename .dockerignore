@@ -4,7 +4,9 @@ node_modules
 **/.next
 .git
 .gitignore
-storage
+# PDF data at repo root only — keep apps/api/src/storage source in the image
+/storage
+/storage/**
 *.log
 .env
 .env.*
