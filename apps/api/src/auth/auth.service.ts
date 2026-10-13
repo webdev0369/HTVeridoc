@@ -105,13 +105,23 @@ export class AuthService {
     const user = await this.usersRepo.findOne({
       where: { email: dto.email.toLowerCase() },
     });
-    if (!user || user.status !== UserStatus.ACTIVE) {
-      throw new UnauthorizedException('Invalid credentials');
+    // Same message for unknown email / wrong password — avoid account enumeration.
+    if (!user) {
+      throw new UnauthorizedException(
+        'Invalid email or password. Check your details and try again.',
+      );
+    }
+    if (user.status !== UserStatus.ACTIVE) {
+      throw new UnauthorizedException(
+        'This account is disabled. Contact your organization administrator.',
+      );
     }
 
     const valid = await bcrypt.compare(dto.password, user.passwordHash);
     if (!valid) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException(
+        'Invalid email or password. Check your details and try again.',
+      );
     }
 
     const memberships = await this.membershipsRepo.find({
@@ -121,7 +131,9 @@ export class AuthService {
     });
 
     if (!memberships.length) {
-      throw new UnauthorizedException('User has no organization membership');
+      throw new UnauthorizedException(
+        'Your account is not linked to an organization. Ask an admin to invite you, or create a new organization.',
+      );
     }
 
     let membership = memberships[0];
@@ -130,7 +142,9 @@ export class AuthService {
         (m) => m.organizationId === dto.organizationId,
       );
       if (!selected) {
-        throw new UnauthorizedException('Not a member of that organization');
+        throw new UnauthorizedException(
+          'You are not a member of that organization. Sign in without selecting it, or ask an admin for access.',
+        );
       }
       membership = selected;
     }

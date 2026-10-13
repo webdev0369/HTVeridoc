@@ -114,6 +114,8 @@ export interface ExtractionLineItemDto {
   stocktakingUnit: string | null;
   stockTakingQuantityPerPurchaseUnit: number | null;
   baseMeasurementUnit: string | null;
+  /** Content of one stocktaking unit in baseMeasurementUnit (e.g. 0.75 when base is L). */
+  baseContentQuantity: number | null;
   pricePerBaseUnit: number | null;
   stockTakingQuantityPerBaseMeasurementUnit: number | null;
   unitPrice: number | null;
@@ -198,6 +200,55 @@ export interface ValidationDto {
 
 export type FieldMode = 'IGNORED' | 'OPTIONAL' | 'REQUIRED';
 
+/** Feature key: built-in (e.g. normalizeVolumeToLiters) or org-defined camelCase. */
+export type LineItemFeature = string;
+
+export interface LineItemColumnConfig {
+  mode: FieldMode;
+  features: LineItemFeature[];
+}
+
+export interface LineItemDocumentConfig {
+  columns: Partial<Record<string, LineItemColumnConfig>>;
+}
+
+export interface CustomLineItemFeature {
+  key: string;
+  label: string;
+}
+
+export interface OrganizationSettings {
+  lineItemConfigByDocumentType: Record<string, LineItemDocumentConfig>;
+  customLineItemFeatures?: CustomLineItemFeature[];
+}
+
+export interface LineItemCatalogColumn {
+  key: string;
+  label: string;
+}
+
+export interface LineItemCatalogFeature {
+  key: string;
+  label: string;
+  columnKeys: string[];
+  builtin?: boolean;
+}
+
+export interface LineItemCatalog {
+  columns: LineItemCatalogColumn[];
+  features: LineItemCatalogFeature[];
+}
+
+export interface OrganizationDto {
+  id: string;
+  name: string;
+  slug: string;
+  settings: OrganizationSettings;
+  lineItemCatalog?: LineItemCatalog;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type DocumentTypeCode =
   | 'PURCHASE_ORDER'
   | 'PURCHASE_ORDER_CONFIRMATION'
@@ -227,6 +278,22 @@ export interface DocumentTypeOptionDto {
   extractionSupported: boolean;
 }
 
+/** Per-org outbound webhook for status handoff to other projects. */
+export interface WebhookEndpointDto {
+  configured: boolean;
+  url: string | null;
+  hasSecret: boolean;
+  isActive: boolean;
+  updatedAt: string | null;
+}
+
+export interface EditorLinkDto {
+  token: string;
+  url: string;
+  documentId: string;
+  expiresAt: string;
+}
+
 /** Public export-destination connection for the current organization (secrets never returned). */
 export interface ExportConnectionDto {
   configured: boolean;
@@ -235,6 +302,53 @@ export interface ExportConnectionDto {
   username: string | null;
   hasApiKey: boolean;
   hasPassword: boolean;
+  inventoryId: string | null;
+  usePartnerSchedule: boolean;
   isActive: boolean;
   updatedAt: string | null;
+}
+
+export interface ExportSupplierMatchDto {
+  externalKey: string;
+  displayName: string | null;
+  destinationSupplierId: string | null;
+  matchMethod: string | null;
+  matched: boolean;
+}
+
+export interface ExportProductMatchDto {
+  lineItemId: string;
+  articleNumber: string | null;
+  description: string | null;
+  destinationProductId: string | null;
+  matchMethod: string | null;
+  matched: boolean;
+}
+
+export interface DocumentExportMatchPreviewDto {
+  configured: boolean;
+  connectionMode: 'mock' | 'live' | null;
+  connectionActive: boolean;
+  message: string | null;
+  match: {
+    documentNumber: string | null;
+    supplier: ExportSupplierMatchDto;
+    products: ExportProductMatchDto[];
+    unmatchedProductCount: number;
+    readyForExport: boolean;
+  } | null;
+}
+
+export interface DocumentExportStatusDto {
+  documentId: string;
+  documentStatus: string;
+  configured: boolean;
+  connectionMode: 'mock' | 'live' | null;
+  connectionActive: boolean;
+  exportStatus: 'pending' | 'exporting' | 'exported' | 'failed' | null;
+  destinationPoId: string | null;
+  externalPoNumber: string | null;
+  lastError: string | null;
+  exportedAt: string | null;
+  matchSummary: Record<string, unknown> | null;
 }

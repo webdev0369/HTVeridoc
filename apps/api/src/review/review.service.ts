@@ -17,8 +17,9 @@ import { FieldConfigService } from '../fields/field-config.service';
 import { FieldCorrectionService } from '../fields/field-correction.service';
 import { ProcessingLogService } from '../processing/processing-log.service';
 import { ValidationService } from '../validation/validation.service';
-import { DocumentExportService } from '../integrations/export/document-export.service';
+import { HandoffDispatchService } from '../integrations/handoff/handoff-dispatch.service';
 import { deriveLineUnitFields } from '../extraction/line-unit-derivation';
+import { OrganizationsService } from '../organizations/organizations.service';
 import { BulkUpdateLineColumnDto } from './dto/bulk-update-line-column.dto';
 import { CreateLineItemDto } from './dto/create-line-item.dto';
 import { UpdateFieldDto } from './dto/update-field.dto';
@@ -51,7 +52,8 @@ export class ReviewService {
     private readonly fieldConfigService: FieldConfigService,
     private readonly fieldCorrectionService: FieldCorrectionService,
     private readonly validationService: ValidationService,
-    private readonly documentExport: DocumentExportService,
+    private readonly handoff: HandoffDispatchService,
+    private readonly organizations: OrganizationsService,
     @InjectRepository(Document)
     private readonly documentsRepo: Repository<Document>,
     @InjectRepository(Extraction)
@@ -79,6 +81,11 @@ export class ReviewService {
         'REVIEW_STARTED',
         'Document opened for review',
         { level: 'info' },
+      );
+      this.handoff.notifyStatus(
+        organizationId,
+        documentId,
+        DocumentStatus.IN_REVIEW,
       );
     }
 
@@ -119,8 +126,12 @@ export class ReviewService {
       { level: 'success' },
     );
 
-    // Kick off export: APPROVED → EXPORTING → EXPORTED / EXPORT_FAILED
-    await this.documentExport.enqueueAfterApprove(organizationId, documentId);
+    // Notify listening systems (webhooks) with status + extraction payload.
+    this.handoff.notifyStatus(
+      organizationId,
+      documentId,
+      DocumentStatus.APPROVED,
+    );
 
     return this.documentsService.findOne(organizationId, documentId);
   }
@@ -152,6 +163,11 @@ export class ReviewService {
       `Document reopened for review (was ${previous})`,
       { level: 'info', meta: { previousStatus: previous } },
     );
+    this.handoff.notifyStatus(
+      organizationId,
+      documentId,
+      DocumentStatus.IN_REVIEW,
+    );
 
     return this.documentsService.findOne(organizationId, documentId);
   }
@@ -179,6 +195,11 @@ export class ReviewService {
         level: 'warn',
         meta: reason?.trim() ? { reason: reason.trim() } : undefined,
       },
+    );
+    this.handoff.notifyStatus(
+      organizationId,
+      documentId,
+      DocumentStatus.REJECTED,
     );
 
     return this.documentsService.findOne(organizationId, documentId);
@@ -273,6 +294,7 @@ export class ReviewService {
       stocktakingUnit: dto.stocktakingUnit ?? null,
       stockTakingQuantityPerPurchaseUnit: null,
       baseMeasurementUnit: null,
+      baseContentQuantity: null,
       pricePerBaseUnit: null,
       stockTakingQuantityPerBaseMeasurementUnit: null,
       unitPrice: dto.unitPrice ?? null,
@@ -289,7 +311,11 @@ export class ReviewService {
       bboxHeight: null,
       isUserEdited: true,
     });
-    this.applyDerivedUnitFields(line);
+    await this.applyDerivedUnitFields(
+      organizationId,
+      document.documentType,
+      line,
+    );
     await this.lineItemsRepo.save(line);
 
     await this.ensureInReview(document, organizationId);
@@ -353,6 +379,7 @@ export class ReviewService {
       dto.stockTakingQuantityPerPurchaseUnit,
     );
     assignString('baseMeasurementUnit', dto.baseMeasurementUnit);
+    assignString('baseContentQuantity', dto.baseContentQuantity);
     assignString('pricePerBaseUnit', dto.pricePerBaseUnit);
     assignString(
       'stockTakingQuantityPerBaseMeasurementUnit',
@@ -367,7 +394,11 @@ export class ReviewService {
       line.lineType = dto.lineType;
     }
 
-    this.applyDerivedUnitFields(line);
+    await this.applyDerivedUnitFields(
+      organizationId,
+      document.documentType,
+      line,
+    );
     line.isUserEdited = true;
     await this.lineItemsRepo.save(line);
 
@@ -402,7 +433,11 @@ export class ReviewService {
       const line = byId.get(row.lineItemId);
       if (!line) continue;
       this.applyLineColumnValue(line, dto.column, row.value ?? null);
-      this.applyDerivedUnitFields(line);
+      await this.applyDerivedUnitFields(
+        organizationId,
+        document.documentType,
+        line,
+      );
       line.isUserEdited = true;
       updated += 1;
     }
@@ -425,7 +460,11 @@ export class ReviewService {
     return this.extractionService.getByDocument(organizationId, documentId);
   }
 
-  private applyDerivedUnitFields(line: ExtractionLineItem) {
+  private async applyDerivedUnitFields(
+    organizationId: string,
+    documentType: string,
+    line: ExtractionLineItem,
+  ) {
     // Keep legacy quantity in sync with purchase qty for validators.
     if (line.purchaseQuantity != null && line.purchaseQuantity !== '') {
       line.quantity = line.purchaseQuantity;
@@ -433,25 +472,47 @@ export class ReviewService {
       line.purchaseQuantity = line.quantity;
     }
 
-    const derived = deriveLineUnitFields({
-      purchaseUnit: line.purchaseUnit,
-      stocktakingUnit: line.stocktakingUnit,
-      purchaseQuantity: line.purchaseQuantity,
-      stockTakingQuantity: line.stockTakingQuantity,
-      packageQuantity: line.packageQuantity,
-      stockTakingQuantityPerPurchaseUnit:
-        line.stockTakingQuantityPerPurchaseUnit,
-      baseMeasurementUnit: line.baseMeasurementUnit,
-      pricePerBaseUnit: line.pricePerBaseUnit,
-      stockTakingQuantityPerBaseMeasurementUnit:
-        line.stockTakingQuantityPerBaseMeasurementUnit,
-    });
+    const preferLiters = await this.organizations.preferLitersForVolumeBase(
+      organizationId,
+      documentType,
+    );
+    const derived = deriveLineUnitFields(
+      {
+        purchaseUnit: line.purchaseUnit,
+        stocktakingUnit: line.stocktakingUnit,
+        purchaseQuantity: line.purchaseQuantity,
+        stockTakingQuantity: line.stockTakingQuantity,
+        packageQuantity: line.packageQuantity,
+        stockTakingQuantityPerPurchaseUnit:
+          line.stockTakingQuantityPerPurchaseUnit,
+        baseMeasurementUnit: line.baseMeasurementUnit,
+        baseContentQuantity: line.baseContentQuantity,
+        pricePerBaseUnit: line.pricePerBaseUnit,
+        stockTakingQuantityPerBaseMeasurementUnit:
+          line.stockTakingQuantityPerBaseMeasurementUnit,
+        packaging: line.packaging,
+      },
+      { preferLitersForVolumeBase: preferLiters },
+    );
+    line.purchaseUnit = derived.purchaseUnit;
+    line.stocktakingUnit = derived.stocktakingUnit;
+    if (derived.purchaseQuantity != null) {
+      line.purchaseQuantity = derived.purchaseQuantity;
+      line.quantity = derived.purchaseQuantity;
+    }
+    if (derived.stockTakingQuantity != null) {
+      line.stockTakingQuantity = derived.stockTakingQuantity;
+    }
     line.stockTakingQuantityPerPurchaseUnit =
       derived.stockTakingQuantityPerPurchaseUnit;
     line.baseMeasurementUnit = derived.baseMeasurementUnit;
+    line.baseContentQuantity = derived.baseContentQuantity;
     line.pricePerBaseUnit = derived.pricePerBaseUnit;
     line.stockTakingQuantityPerBaseMeasurementUnit =
       derived.stockTakingQuantityPerBaseMeasurementUnit;
+    if (derived.purchaseUnit && !line.unit) {
+      line.unit = derived.purchaseUnit;
+    }
   }
 
   private applyLineColumnValue(
@@ -506,6 +567,9 @@ export class ReviewService {
         break;
       case 'baseMeasurementUnit':
         line.baseMeasurementUnit = text;
+        break;
+      case 'baseContentQuantity':
+        line.baseContentQuantity = asNumString();
         break;
       case 'pricePerBaseUnit':
         line.pricePerBaseUnit = asNumString();

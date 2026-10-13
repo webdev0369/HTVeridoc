@@ -7,6 +7,7 @@ import { ExtractionField } from '../extraction/entities/extraction-field.entity'
 import { ExtractionLineItem } from '../extraction/entities/extraction-line-item.entity';
 import { ExtractionModule } from '../extraction/extraction.module';
 import { FieldConfigModule } from '../fields/field-config.module';
+import { OrganizationsModule } from '../organizations/organizations.module';
 import { ProcessingLogModule } from '../processing-log/processing-log.module';
 import { ValidationModule } from '../validation/validation.module';
 import { ReviewController } from './review.controller';
@@ -24,6 +25,7 @@ import { ReviewService } from './review.service';
     ExtractionModule,
     ProcessingLogModule,
     FieldConfigModule,
+    OrganizationsModule,
     ValidationModule,
   ],
   controllers: [ReviewController],

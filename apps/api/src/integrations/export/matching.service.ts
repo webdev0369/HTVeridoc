@@ -48,6 +48,7 @@ export class ExportMatchingService {
     });
 
     const documentNumber = this.fieldValue(fields, 'documentNumber');
+    const currency = this.fieldValue(fields, 'currency');
     const supplierName = this.fieldValue(fields, 'supplier.name');
 
     const supplier = await this.supplierService.matchSupplier(
@@ -61,6 +62,9 @@ export class ExportMatchingService {
 
     const products = [];
     for (const line of productLines) {
+      const purchaseQty = this.asNumber(
+        line.purchaseQuantity ?? line.quantity,
+      );
       products.push(
         await this.productService.matchProduct(connection, {
           lineItemId: line.id,
@@ -68,6 +72,15 @@ export class ExportMatchingService {
           description: line.description,
           brand: line.brand,
           supplierKey: supplier.externalKey,
+          purchaseQuantity: purchaseQty,
+          purchaseUnit: line.purchaseUnit ?? line.unit,
+          stockTakingQuantity: this.asNumber(line.stockTakingQuantity),
+          stocktakingUnit: line.stocktakingUnit,
+          stockTakingQuantityPerPurchaseUnit: this.asNumber(
+            line.stockTakingQuantityPerPurchaseUnit,
+          ),
+          unitPrice: this.asNumber(line.unitPrice),
+          amount: this.asNumber(line.amount),
         }),
       );
     }
@@ -79,11 +92,29 @@ export class ExportMatchingService {
 
     return {
       documentNumber,
+      currency,
       supplier,
       products,
       unmatchedProductCount,
       readyForExport,
     };
+  }
+
+  private asNumber(
+    value: string | number | null | undefined,
+  ): number | null {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    let s = String(value).trim().replace(/\s/g, '');
+    if (s.includes(',') && s.includes('.')) {
+      s = s.replace(/\./g, '').replace(',', '.');
+    } else if (s.includes(',')) {
+      s = s.replace(',', '.');
+    }
+    const n = Number(s);
+    return Number.isFinite(n) ? n : null;
   }
 
   private fieldValue(

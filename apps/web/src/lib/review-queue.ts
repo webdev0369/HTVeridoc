@@ -1,5 +1,6 @@
 import {
   getLineColumnValue,
+  lineAnchorHints,
   lineSelectionLabel,
   visibleLineReviewColumns,
   type ReviewSelection,
@@ -89,6 +90,7 @@ export function buildReviewQueue(
         value: getLineColumnValue(line, column),
         page: line.source?.page ?? null,
         boundingBox: line.source?.boundingBox,
+        anchorHints: lineAnchorHints(line),
         tone,
       });
     }

@@ -18,6 +18,7 @@ import { ExportProductService } from './product.service';
 import { ExportPurchaseOrderService } from './purchase-order.service';
 import { ExportSupplierService } from './supplier.service';
 import { ExportConnectionController } from './export-connection.controller';
+import { DocumentExportController } from './document-export.controller';
 import { DocumentExportProcessor } from './document-export.processor';
 import { DOCUMENT_EXPORT_QUEUE } from './document-export.queue';
 import { ExportClientService } from './export-client.service';
@@ -47,7 +48,7 @@ export class ExportModule {
           ? [BullModule.registerQueue({ name: DOCUMENT_EXPORT_QUEUE })]
           : []),
       ],
-      controllers: [ExportConnectionController],
+      controllers: [ExportConnectionController, DocumentExportController],
       providers: [
         ExportClientService,
         ExportConnectionService,

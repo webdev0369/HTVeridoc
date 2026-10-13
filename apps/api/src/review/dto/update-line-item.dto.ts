@@ -73,6 +73,11 @@ export class UpdateLineItemDto {
   @IsOptional()
   @IsString()
   @MaxLength(64)
+  baseContentQuantity?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
   pricePerBaseUnit?: string | null;
 
   @IsOptional()

@@ -15,9 +15,12 @@ import { Document } from '../documents/entities/document.entity';
 import { DOCUMENT_TYPE_LABELS } from '../fields/field-catalog';
 import { ProcessingLogService } from '../processing/processing-log.service';
 import { StorageService } from '../storage/storage.service';
+import { OrganizationsService } from '../organizations/organizations.service';
+import { HandoffDispatchService } from '../integrations/handoff/handoff-dispatch.service';
 import { ValidationService } from '../validation/validation.service';
 import { Extraction } from './entities/extraction.entity';
 import { ExtractionNormalizerService } from './extraction-normalizer.service';
+import { deriveLineUnitFields } from './line-unit-derivation';
 
 @Injectable()
 export class ExtractionService {
@@ -32,8 +35,10 @@ export class ExtractionService {
     private readonly aiService: AiService,
     private readonly normalizer: ExtractionNormalizerService,
     private readonly processingLog: ProcessingLogService,
+    private readonly organizations: OrganizationsService,
     @Inject(forwardRef(() => ValidationService))
     private readonly validationService: ValidationService,
+    private readonly handoff: HandoffDispatchService,
   ) {}
 
   async processDocument(documentId: string, organizationId: string) {
@@ -186,6 +191,11 @@ export class ExtractionService {
 
       document.status = DocumentStatus.EXTRACTED;
       await this.documentsRepo.save(document);
+      this.handoff.notifyStatus(
+        organizationId,
+        documentId,
+        DocumentStatus.EXTRACTED,
+      );
 
       await this.processingLog.log(
         documentId,
@@ -228,6 +238,11 @@ export class ExtractionService {
         );
         document.status = DocumentStatus.VALIDATION_FAILED;
         await this.documentsRepo.save(document);
+        this.handoff.notifyStatus(
+          organizationId,
+          documentId,
+          DocumentStatus.VALIDATION_FAILED,
+        );
       }
 
       return this.getByDocument(organizationId, documentId);
@@ -239,6 +254,11 @@ export class ExtractionService {
 
       document.status = DocumentStatus.EXTRACTION_FAILED;
       await this.documentsRepo.save(document);
+      this.handoff.notifyStatus(
+        organizationId,
+        documentId,
+        DocumentStatus.EXTRACTION_FAILED,
+      );
 
       await this.processingLog.log(
         documentId,
@@ -275,7 +295,7 @@ export class ExtractionService {
     if (!extraction) {
       throw new NotFoundException('Extraction not found');
     }
-    return this.toDto(extraction);
+    return this.toDto(extraction, organizationId, document.documentType);
   }
 
   async getEvents(organizationId: string, documentId: string) {
@@ -291,7 +311,15 @@ export class ExtractionService {
     return this.processingLog.listForDocument(organizationId, documentId);
   }
 
-  private toDto(extraction: Extraction) {
+  private async toDto(
+    extraction: Extraction,
+    organizationId: string,
+    documentType: string,
+  ) {
+    const preferLiters = await this.organizations.preferLitersForVolumeBase(
+      organizationId,
+      documentType,
+    );
     const lineItems = [...(extraction.lineItems ?? [])].sort(
       (a, b) => a.sortOrder - b.sortOrder,
     );
@@ -348,41 +376,80 @@ export class ExtractionService {
             }
           : null,
       })),
-      lineItems: lineItems.map((l) => ({
+      lineItems: lineItems.map((l) => {
+        const derived = deriveLineUnitFields(
+          {
+            purchaseUnit: l.purchaseUnit,
+            stocktakingUnit: l.stocktakingUnit,
+            purchaseQuantity: l.purchaseQuantity ?? l.quantity,
+            stockTakingQuantity: l.stockTakingQuantity,
+            packageQuantity: l.packageQuantity,
+            stockTakingQuantityPerPurchaseUnit:
+              l.stockTakingQuantityPerPurchaseUnit,
+            baseMeasurementUnit: l.baseMeasurementUnit,
+            baseContentQuantity: l.baseContentQuantity,
+            pricePerBaseUnit: l.pricePerBaseUnit,
+            stockTakingQuantityPerBaseMeasurementUnit:
+              l.stockTakingQuantityPerBaseMeasurementUnit,
+            packaging: l.packaging,
+          },
+          { preferLitersForVolumeBase: preferLiters },
+        );
+        const purchaseQuantity =
+          derived.purchaseQuantity != null
+            ? Number(derived.purchaseQuantity)
+            : l.purchaseQuantity != null
+              ? Number(l.purchaseQuantity)
+              : l.quantity != null
+                ? Number(l.quantity)
+                : null;
+        return {
         id: l.id,
         sortOrder: l.sortOrder,
         position: l.position,
         articleNumber: l.articleNumber,
         description: l.description,
         brand: l.brand,
-        quantity: l.quantity != null ? Number(l.quantity) : null,
-        purchaseQuantity:
-          l.purchaseQuantity != null
-            ? Number(l.purchaseQuantity)
-            : l.quantity != null
-              ? Number(l.quantity)
-              : null,
+        quantity: purchaseQuantity,
+        purchaseQuantity,
         stockTakingQuantity:
-          l.stockTakingQuantity != null
-            ? Number(l.stockTakingQuantity)
-            : null,
+          derived.stockTakingQuantity != null
+            ? Number(derived.stockTakingQuantity)
+            : l.stockTakingQuantity != null
+              ? Number(l.stockTakingQuantity)
+              : null,
         packaging: l.packaging,
         packageQuantity:
           l.packageQuantity != null ? Number(l.packageQuantity) : null,
-        unit: l.unit,
-        purchaseUnit: l.purchaseUnit,
-        stocktakingUnit: l.stocktakingUnit,
+        unit: l.unit ?? derived.purchaseUnit,
+        purchaseUnit: derived.purchaseUnit ?? l.purchaseUnit,
+        stocktakingUnit: derived.stocktakingUnit ?? l.stocktakingUnit,
         stockTakingQuantityPerPurchaseUnit:
-          l.stockTakingQuantityPerPurchaseUnit != null
-            ? Number(l.stockTakingQuantityPerPurchaseUnit)
-            : null,
-        baseMeasurementUnit: l.baseMeasurementUnit,
+          derived.stockTakingQuantityPerPurchaseUnit != null
+            ? Number(derived.stockTakingQuantityPerPurchaseUnit)
+            : l.stockTakingQuantityPerPurchaseUnit != null
+              ? Number(l.stockTakingQuantityPerPurchaseUnit)
+              : null,
+        baseMeasurementUnit:
+          derived.baseMeasurementUnit ?? l.baseMeasurementUnit,
+        baseContentQuantity:
+          derived.baseContentQuantity != null
+            ? Number(derived.baseContentQuantity)
+            : l.baseContentQuantity != null
+              ? Number(l.baseContentQuantity)
+              : null,
         pricePerBaseUnit:
-          l.pricePerBaseUnit != null ? Number(l.pricePerBaseUnit) : null,
+          derived.pricePerBaseUnit != null
+            ? Number(derived.pricePerBaseUnit)
+            : l.pricePerBaseUnit != null
+              ? Number(l.pricePerBaseUnit)
+              : null,
         stockTakingQuantityPerBaseMeasurementUnit:
-          l.stockTakingQuantityPerBaseMeasurementUnit != null
-            ? Number(l.stockTakingQuantityPerBaseMeasurementUnit)
-            : null,
+          derived.stockTakingQuantityPerBaseMeasurementUnit != null
+            ? Number(derived.stockTakingQuantityPerBaseMeasurementUnit)
+            : l.stockTakingQuantityPerBaseMeasurementUnit != null
+              ? Number(l.stockTakingQuantityPerBaseMeasurementUnit)
+              : null,
         unitPrice: l.unitPrice != null ? Number(l.unitPrice) : null,
         stocktakingUnitPrice:
           l.stocktakingUnitPrice != null
@@ -408,7 +475,8 @@ export class ExtractionService {
                   : undefined,
             }
           : null,
-      })),
+      };
+      }),
       sources: (extraction.sources ?? []).map((s) => ({
         id: s.id,
         targetType: s.targetType,

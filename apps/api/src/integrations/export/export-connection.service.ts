@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -18,6 +19,8 @@ export interface ExportConnectionPublicDto {
   username: string | null;
   hasApiKey: boolean;
   hasPassword: boolean;
+  inventoryId: string | null;
+  usePartnerSchedule: boolean;
   isActive: boolean;
   updatedAt: string | null;
 }
@@ -50,6 +53,8 @@ export class ExportConnectionService {
         username: null,
         hasApiKey: false,
         hasPassword: false,
+        inventoryId: null,
+        usePartnerSchedule: false,
         isActive: false,
         updatedAt: null,
       };
@@ -82,6 +87,8 @@ export class ExportConnectionService {
         apiKey: null,
         username: null,
         password: null,
+        inventoryId: null,
+        usePartnerSchedule: false,
         isActive: dto.isActive ?? true,
       });
     }
@@ -93,6 +100,14 @@ export class ExportConnectionService {
 
     if (dto.username !== undefined) {
       row.username = dto.username.trim() || null;
+    }
+
+    if (dto.inventoryId !== undefined) {
+      row.inventoryId = dto.inventoryId.trim() || null;
+    }
+
+    if (dto.usePartnerSchedule !== undefined) {
+      row.usePartnerSchedule = dto.usePartnerSchedule;
     }
 
     if (dto.clearApiKey) {
@@ -115,6 +130,11 @@ export class ExportConnectionService {
           'Live export requires an API key or username + password for this organization',
         );
       }
+      if (!row.usePartnerSchedule && !row.inventoryId) {
+        throw new BadRequestException(
+          'Live store-orders export requires an inventory ID, or enable Partner schedule ingest',
+        );
+      }
     }
 
     await this.connectionsRepo.save(row);
@@ -135,8 +155,28 @@ export class ExportConnectionService {
 
   /** Verifies org credentials without exporting a document. */
   async test(organizationId: string) {
-    const connection = await this.exportClient.resolveConnection(organizationId);
-    await this.exportClient.authenticate(connection);
+    let connection;
+    try {
+      connection = await this.exportClient.resolveConnection(organizationId);
+    } catch (err) {
+      if (err instanceof HttpException) throw err;
+      throw new BadRequestException(
+        err instanceof Error
+          ? err.message
+          : 'Export destination is not ready to test',
+      );
+    }
+
+    try {
+      await this.exportClient.authenticate(connection);
+    } catch (err) {
+      throw new BadRequestException(
+        err instanceof Error
+          ? `Connection test failed: ${err.message}`
+          : 'Connection test failed. Check the base URL and credentials, then try again.',
+      );
+    }
+
     return {
       ok: true,
       mode: connection.mode,
@@ -155,6 +195,8 @@ export class ExportConnectionService {
       username: row.username,
       hasApiKey: Boolean(row.apiKey),
       hasPassword: Boolean(row.password),
+      inventoryId: row.inventoryId ?? null,
+      usePartnerSchedule: Boolean(row.usePartnerSchedule),
       isActive: row.isActive,
       updatedAt: row.updatedAt?.toISOString() ?? null,
     };

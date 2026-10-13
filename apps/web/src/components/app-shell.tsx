@@ -131,14 +131,14 @@ function NavLinks({
             ) : null}
             {canReadIntegrations ? (
               <Link
-                href="/settings/integrations/export"
+                href="/settings/integrations/webhooks"
                 onClick={onNavigate}
                 className={linkClass(
-                  pathname.startsWith('/settings/integrations'),
+                  pathname.startsWith('/settings/integrations/webhooks'),
                 )}
               >
                 <Cable className="h-4 w-4" aria-hidden />
-                Export destination
+                Webhooks
               </Link>
             ) : null}
           </nav>
@@ -293,8 +293,8 @@ export function AppShell({
                     canReadIntegrations
                       ? [
                           {
-                            href: '/settings/integrations/export',
-                            label: 'Export',
+                            href: '/settings/integrations/webhooks',
+                            label: 'Webhooks',
                             icon: Cable,
                           },
                         ]

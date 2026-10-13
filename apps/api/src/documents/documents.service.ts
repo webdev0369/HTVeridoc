@@ -9,6 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { Repository } from 'typeorm';
 import { DocumentStatus, DocumentType } from '../common/enums';
+import { HandoffDispatchService } from '../integrations/handoff/handoff-dispatch.service';
 import { StorageService } from '../storage/storage.service';
 import { Document } from './entities/document.entity';
 import { assertPdfBuffer, getPdfPageCount } from './pdf.util';
@@ -20,6 +21,7 @@ export class DocumentsService {
     private readonly documentsRepo: Repository<Document>,
     private readonly storage: StorageService,
     private readonly config: ConfigService,
+    private readonly handoff: HandoffDispatchService,
   ) {}
 
   async upload(
@@ -125,6 +127,7 @@ export class DocumentsService {
     const document = await this.getOwned(organizationId, id);
     document.status = status;
     await this.documentsRepo.save(document);
+    this.handoff.notifyStatus(organizationId, id, status);
     return this.toDto(document);
   }
 

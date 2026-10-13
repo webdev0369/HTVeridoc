@@ -9,6 +9,7 @@ import {
 import { DocumentType } from '../common/enums';
 import { Document } from '../documents/entities/document.entity';
 import { FieldCorrectionService } from '../fields/field-correction.service';
+import { OrganizationsService } from '../organizations/organizations.service';
 import { Extraction } from './entities/extraction.entity';
 import { ExtractionField } from './entities/extraction-field.entity';
 import { ExtractionLineItem } from './entities/extraction-line-item.entity';
@@ -32,12 +33,21 @@ export class ExtractionNormalizerService {
   constructor(
     private readonly dataSource: DataSource,
     private readonly fieldCorrections: FieldCorrectionService,
+    private readonly organizations: OrganizationsService,
   ) {}
 
   async replaceStructuredRows(
     extraction: Extraction,
     data: PoConfirmationExtraction,
   ) {
+    const document = await this.dataSource.getRepository(Document).findOne({
+      where: { id: extraction.documentId },
+    });
+    const preferLiters = await this.organizations.preferLitersForVolumeBase(
+      extraction.organizationId,
+      document?.documentType ?? DocumentType.PURCHASE_ORDER_CONFIRMATION,
+    );
+
     await this.dataSource.transaction(async (manager) => {
       // Remember reviewer edits on this document before wiping rows (reprocess).
       const previousFields = await manager.find(ExtractionField, {
@@ -196,6 +206,7 @@ export class ExtractionNormalizerService {
             this.num(item.stockTakingQuantityPerPurchaseUnit),
           baseMeasurementUnit:
             prior?.baseMeasurementUnit ?? item.baseMeasurementUnit ?? null,
+          baseContentQuantity: prior?.baseContentQuantity ?? null,
           pricePerBaseUnit:
             prior?.pricePerBaseUnit ?? this.num(item.pricePerBaseUnit),
           stockTakingQuantityPerBaseMeasurementUnit:
@@ -220,27 +231,45 @@ export class ExtractionNormalizerService {
         });
       });
 
-      // Derive conversion / base-unit fields (same units → factor 1, etc.).
+      // Derive units from packaging text + qty conversions (same units → factor 1, etc.).
       for (const row of lineRows) {
-        const derived = deriveLineUnitFields({
-          purchaseUnit: row.purchaseUnit,
-          stocktakingUnit: row.stocktakingUnit,
-          purchaseQuantity: row.purchaseQuantity,
-          stockTakingQuantity: row.stockTakingQuantity,
-          packageQuantity: row.packageQuantity,
-          stockTakingQuantityPerPurchaseUnit:
-            row.stockTakingQuantityPerPurchaseUnit,
-          baseMeasurementUnit: row.baseMeasurementUnit,
-          pricePerBaseUnit: row.pricePerBaseUnit,
-          stockTakingQuantityPerBaseMeasurementUnit:
-            row.stockTakingQuantityPerBaseMeasurementUnit,
-        });
+        const derived = deriveLineUnitFields(
+          {
+            purchaseUnit: row.purchaseUnit,
+            stocktakingUnit: row.stocktakingUnit,
+            purchaseQuantity: row.purchaseQuantity,
+            stockTakingQuantity: row.stockTakingQuantity,
+            packageQuantity: row.packageQuantity,
+            stockTakingQuantityPerPurchaseUnit:
+              row.stockTakingQuantityPerPurchaseUnit,
+            baseMeasurementUnit: row.baseMeasurementUnit,
+            baseContentQuantity: row.baseContentQuantity,
+            pricePerBaseUnit: row.pricePerBaseUnit,
+            stockTakingQuantityPerBaseMeasurementUnit:
+              row.stockTakingQuantityPerBaseMeasurementUnit,
+            packaging: row.packaging,
+          },
+          { preferLitersForVolumeBase: preferLiters },
+        );
+        row.purchaseUnit = derived.purchaseUnit;
+        row.stocktakingUnit = derived.stocktakingUnit;
+        if (derived.purchaseQuantity != null) {
+          row.purchaseQuantity = derived.purchaseQuantity;
+          row.quantity = derived.purchaseQuantity;
+        }
+        if (derived.stockTakingQuantity != null) {
+          row.stockTakingQuantity = derived.stockTakingQuantity;
+        }
         row.stockTakingQuantityPerPurchaseUnit =
           derived.stockTakingQuantityPerPurchaseUnit;
         row.baseMeasurementUnit = derived.baseMeasurementUnit;
+        row.baseContentQuantity = derived.baseContentQuantity;
         row.pricePerBaseUnit = derived.pricePerBaseUnit;
         row.stockTakingQuantityPerBaseMeasurementUnit =
           derived.stockTakingQuantityPerBaseMeasurementUnit;
+        if (derived.purchaseUnit && !row.unit) {
+          row.unit = derived.purchaseUnit;
+        }
       }
 
       const savedLines = await manager.save(lineRows);

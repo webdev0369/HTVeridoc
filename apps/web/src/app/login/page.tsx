@@ -19,13 +19,40 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { cn } from '@/lib/utils';
 
 const schema = z.object({
-  email: z.string().email(),
-  password: z.string().min(8),
+  email: z
+    .string()
+    .trim()
+    .min(1, 'Email is required')
+    .email('Enter a valid email address'),
+  password: z
+    .string()
+    .min(1, 'Password is required')
+    .min(8, 'Password must be at least 8 characters'),
 });
 
 type FormValues = z.infer<typeof schema>;
+
+function loginErrorMessage(err: unknown): string {
+  if (!(err instanceof ApiError)) {
+    return 'Sign in failed. Check your connection and try again.';
+  }
+  if (err.status === 401) {
+    return (
+      err.message ||
+      'Invalid email or password. Check your details and try again.'
+    );
+  }
+  if (err.status === 400) {
+    return err.message || 'Check the highlighted fields and try again.';
+  }
+  if (err.status >= 500) {
+    return 'Sign in is temporarily unavailable. Please try again in a moment.';
+  }
+  return err.message || 'Sign in failed. Please try again.';
+}
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -34,8 +61,12 @@ export default function LoginPage() {
   const {
     register,
     handleSubmit,
-    formState: { isSubmitting },
-  } = useForm<FormValues>({ resolver: zodResolver(schema) });
+    formState: { isSubmitting, errors, isSubmitted },
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
+  });
 
   const onSubmit = handleSubmit(async (values) => {
     setError(null);
@@ -43,7 +74,7 @@ export default function LoginPage() {
       await login(values.email, values.password);
       router.push('/dashboard');
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Login failed');
+      setError(loginErrorMessage(err));
     }
   });
 
@@ -66,15 +97,26 @@ export default function LoginPage() {
           <CardDescription>Enter your credentials to continue.</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={onSubmit} className="space-y-4">
+          <form onSubmit={onSubmit} className="space-y-4" noValidate>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input
                 id="email"
                 type="email"
                 autoComplete="email"
+                aria-invalid={Boolean(errors.email)}
+                aria-describedby={errors.email ? 'email-error' : undefined}
+                className={cn(
+                  errors.email &&
+                    'border-destructive focus-visible:ring-destructive/30',
+                )}
                 {...register('email')}
               />
+              {errors.email ? (
+                <p id="email-error" role="alert" className="text-sm text-destructive">
+                  {errors.email.message}
+                </p>
+              ) : null}
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
@@ -82,14 +124,39 @@ export default function LoginPage() {
                 id="password"
                 type="password"
                 autoComplete="current-password"
+                aria-invalid={Boolean(errors.password)}
+                aria-describedby={
+                  errors.password ? 'password-error' : undefined
+                }
+                className={cn(
+                  errors.password &&
+                    'border-destructive focus-visible:ring-destructive/30',
+                )}
                 {...register('password')}
               />
+              {errors.password ? (
+                <p
+                  id="password-error"
+                  role="alert"
+                  className="text-sm text-destructive"
+                >
+                  {errors.password.message}
+                </p>
+              ) : null}
             </div>
-            {error && (
-              <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+            {error ? (
+              <p
+                role="alert"
+                className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
                 {error}
               </p>
-            )}
+            ) : null}
+            {isSubmitted && Object.keys(errors).length > 0 && !error ? (
+              <p role="alert" className="text-sm text-destructive">
+                Please fix the highlighted fields and try again.
+              </p>
+            ) : null}
             <Button type="submit" disabled={isSubmitting} className="w-full">
               <LogIn className="h-4 w-4" aria-hidden />
               {isSubmitting ? 'Signing in…' : 'Sign in'}

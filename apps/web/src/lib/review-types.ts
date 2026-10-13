@@ -14,6 +14,7 @@ export const LINE_REVIEW_COLUMNS = [
   'stocktakingUnitPrice',
   'stockTakingQuantityPerPurchaseUnit',
   'baseMeasurementUnit',
+  'baseContentQuantity',
   'pricePerBaseUnit',
   'stockTakingQuantityPerBaseMeasurementUnit',
   'discount',
@@ -33,6 +34,7 @@ export const LINE_REVIEW_COLUMN_LABELS: Record<LineReviewColumn, string> = {
   stocktakingUnitPrice: 'Stocktaking price',
   stockTakingQuantityPerPurchaseUnit: 'ST qty / PU',
   baseMeasurementUnit: 'Base unit',
+  baseContentQuantity: 'Content / ST',
   pricePerBaseUnit: 'Price / base',
   stockTakingQuantityPerBaseMeasurementUnit: 'ST qty / base',
   discount: 'Disc.',
@@ -58,9 +60,19 @@ export type ReviewSelection =
       value: string | null;
       page: number | null;
       boundingBox?: BoundingBox;
+      /** Position / item code — keep PDF highlight on this row when value repeats. */
+      anchorHints?: string[];
       tone: HighlightTone;
     }
   | null;
+
+/** Hints so PDF text search prefers this row (e.g. "PK" on line 190 not 150). */
+export function lineAnchorHints(line: ExtractionLineItemDto): string[] {
+  const hints: string[] = [];
+  if (line.position != null) hints.push(String(line.position));
+  if (line.articleNumber?.trim()) hints.push(line.articleNumber.trim());
+  return hints;
+}
 
 function numStr(value: number | null | undefined): string | null {
   return value == null ? null : String(value);
@@ -91,6 +103,8 @@ export function getLineColumnValue(
       return numStr(line.stockTakingQuantityPerPurchaseUnit);
     case 'baseMeasurementUnit':
       return line.baseMeasurementUnit;
+    case 'baseContentQuantity':
+      return numStr(line.baseContentQuantity);
     case 'pricePerBaseUnit':
       return numStr(line.pricePerBaseUnit);
     case 'stockTakingQuantityPerBaseMeasurementUnit':
@@ -133,6 +147,8 @@ export function lineColumnToPatch(
       return { stockTakingQuantityPerPurchaseUnit: asNum() };
     case 'baseMeasurementUnit':
       return { baseMeasurementUnit: text };
+    case 'baseContentQuantity':
+      return { baseContentQuantity: asNum() };
     case 'pricePerBaseUnit':
       return { pricePerBaseUnit: asNum() };
     case 'stockTakingQuantityPerBaseMeasurementUnit':
@@ -169,6 +185,15 @@ export function linesHaveBaseMeasurementUnit(
   return (lines ?? []).some((l) => Boolean(l.baseMeasurementUnit?.trim()));
 }
 
+/** True when any line has content-per-stocktaking in base units. */
+export function linesHaveBaseContentQuantity(
+  lines: ExtractionLineItemDto[] | undefined | null,
+): boolean {
+  return (lines ?? []).some(
+    (l) => l.baseContentQuantity != null && Number.isFinite(l.baseContentQuantity),
+  );
+}
+
 /**
  * True when base unit exists and differs from stocktaking on at least one line
  * (ST qty / base is only meaningful then).
@@ -188,9 +213,11 @@ export function visibleLineReviewColumns(
   lines: ExtractionLineItemDto[] | undefined | null,
 ): LineReviewColumn[] {
   const showBase = linesHaveBaseMeasurementUnit(lines);
+  const showContent = linesHaveBaseContentQuantity(lines);
   const showStPerBase = linesNeedStocktakingPerBase(lines);
   return LINE_REVIEW_COLUMNS.filter((col) => {
     if (BASE_ONLY_COLUMNS.includes(col)) return showBase;
+    if (col === 'baseContentQuantity') return showContent;
     if (col === 'stockTakingQuantityPerBaseMeasurementUnit') {
       return showStPerBase;
     }

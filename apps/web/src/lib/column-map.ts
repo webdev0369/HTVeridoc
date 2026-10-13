@@ -20,6 +20,7 @@ export function isNumericLineColumn(column: LineReviewColumn): boolean {
     column === 'stockTakingQuantity' ||
     column === 'stocktakingUnitPrice' ||
     column === 'stockTakingQuantityPerPurchaseUnit' ||
+    column === 'baseContentQuantity' ||
     column === 'pricePerBaseUnit' ||
     column === 'stockTakingQuantityPerBaseMeasurementUnit' ||
     column === 'discount' ||

@@ -40,6 +40,21 @@ export class ExportConnection {
   @Column({ type: 'varchar', length: 32, default: 'mock' })
   mode!: ExportConnectionMode;
 
+  /** TotalCtrl inventory UUID required for POST /orders/store-orders. */
+  @Column({ name: 'inventory_id', type: 'varchar', length: 64, nullable: true })
+  inventoryId!: string | null;
+
+  /**
+   * When true, Live create uses POST /partner/v1/orders/schedule
+   * instead of /orders/store-orders.
+   */
+  @Column({
+    name: 'use_partner_schedule',
+    type: 'boolean',
+    default: false,
+  })
+  usePartnerSchedule!: boolean;
+
   @Column({ name: 'is_active', type: 'boolean', default: true })
   isActive!: boolean;
 

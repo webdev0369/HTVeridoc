@@ -37,6 +37,8 @@ import { ExportConnection } from './integrations/export/entities/export-connecti
 import { ExportSupplierMapping } from './integrations/export/entities/export-supplier-mapping.entity';
 import { ExportProductMapping } from './integrations/export/entities/export-product-mapping.entity';
 import { ExportPoMapping } from './integrations/export/entities/export-po-mapping.entity';
+import { HandoffModule } from './integrations/handoff/handoff.module';
+import { WebhookEndpoint } from './integrations/handoff/entities/webhook-endpoint.entity';
 
 @Module({
   imports: [
@@ -68,6 +70,7 @@ import { ExportPoMapping } from './integrations/export/entities/export-po-mappin
           ExportSupplierMapping,
           ExportProductMapping,
           ExportPoMapping,
+          WebhookEndpoint,
         ],
         synchronize: false,
         logging: config.get('NODE_ENV') === 'development',
@@ -83,6 +86,7 @@ import { ExportPoMapping } from './integrations/export/entities/export-po-mappin
     ExtractionModule,
     ValidationModule,
     ExportModule.forRootAsync(),
+    HandoffModule,
     ReviewModule,
     FieldConfigModule,
     ProcessingModule.forRootAsync(),

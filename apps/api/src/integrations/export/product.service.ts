@@ -14,6 +14,13 @@ export interface ProductMatchResult {
   destinationProductId: string | null;
   matchMethod: string | null;
   matched: boolean;
+  purchaseQuantity?: number | null;
+  purchaseUnit?: string | null;
+  stockTakingQuantity?: number | null;
+  stocktakingUnit?: string | null;
+  stockTakingQuantityPerPurchaseUnit?: number | null;
+  unitPrice?: number | null;
+  amount?: number | null;
 }
 
 @Injectable()
@@ -94,11 +101,31 @@ export class ExportProductService {
       description: string | null;
       brand: string | null;
       supplierKey: string;
+      purchaseQuantity?: number | null;
+      purchaseUnit?: string | null;
+      stockTakingQuantity?: number | null;
+      stocktakingUnit?: string | null;
+      stockTakingQuantityPerPurchaseUnit?: number | null;
+      unitPrice?: number | null;
+      amount?: number | null;
     },
   ): Promise<ProductMatchResult> {
     const article = this.normalizeArticle(input.articleNumber);
+    const lineExtras = {
+      purchaseQuantity: input.purchaseQuantity ?? null,
+      purchaseUnit: input.purchaseUnit ?? null,
+      stockTakingQuantity: input.stockTakingQuantity ?? null,
+      stocktakingUnit: input.stocktakingUnit ?? null,
+      stockTakingQuantityPerPurchaseUnit:
+        input.stockTakingQuantityPerPurchaseUnit ?? null,
+      unitPrice: input.unitPrice ?? null,
+      amount: input.amount ?? null,
+    };
 
-    if (!article) {
+    const hasIdentity = Boolean(
+      article || (input.description ?? '').trim(),
+    );
+    if (!hasIdentity) {
       return {
         lineItemId: input.lineItemId,
         articleNumber: input.articleNumber,
@@ -106,61 +133,57 @@ export class ExportProductService {
         destinationProductId: null,
         matchMethod: null,
         matched: false,
+        ...lineExtras,
       };
     }
 
-    const mapped = await this.findByArticle(
-      connection.organizationId,
-      input.supplierKey,
-      article,
-    );
-    if (mapped) {
-      return {
-        lineItemId: input.lineItemId,
-        articleNumber: input.articleNumber,
-        description: input.description,
-        destinationProductId: mapped.destinationProductId,
-        matchMethod: mapped.matchMethod || 'sku_mapping',
-        matched: true,
-      };
+    if (article) {
+      const mapped = await this.findByArticle(
+        connection.organizationId,
+        input.supplierKey,
+        article,
+      );
+      if (mapped) {
+        return {
+          lineItemId: input.lineItemId,
+          articleNumber: input.articleNumber,
+          description: input.description,
+          destinationProductId: mapped.destinationProductId,
+          matchMethod: mapped.matchMethod || 'sku_mapping',
+          matched: true,
+          ...lineExtras,
+        };
+      }
     }
 
     if (connection.mode === 'live') {
-      try {
-        const qs = new URLSearchParams({ articleNumber: article });
-        if (input.supplierKey) qs.set('supplierKey', input.supplierKey);
-        const remote = await this.exportClient.request<{ id?: string }>(
-          connection,
-          'GET',
-          `/products?${qs.toString()}`,
+      // TotalCtrl has no Rossum article match HTTP API — lines export with sku/name
+      // (same as parse-order isInDB: 0). Store-orders resolves/creates as needed.
+      const destinationProductId =
+        article ||
+        this.exportClient.mockId(
+          'product',
+          connection.organizationId,
+          input.supplierKey,
+          (input.description ?? '').trim().toLowerCase(),
         );
-        if (remote?.id) {
-          await this.upsertMapping({
-            organizationId: connection.organizationId,
-            supplierKey: input.supplierKey,
-            articleNumber: article,
-            destinationProductId: remote.id,
-            matchMethod: 'live_lookup',
-          });
-          return {
-            lineItemId: input.lineItemId,
-            articleNumber: input.articleNumber,
-            description: input.description,
-            destinationProductId: remote.id,
-            matchMethod: 'live_lookup',
-            matched: true,
-          };
-        }
-      } catch {
-        // unmatched
+      if (article) {
+        await this.upsertMapping({
+          organizationId: connection.organizationId,
+          supplierKey: input.supplierKey,
+          articleNumber: article,
+          destinationProductId,
+          matchMethod: 'sku_passthrough',
+        });
       }
       return {
         lineItemId: input.lineItemId,
         articleNumber: input.articleNumber,
         description: input.description,
-        destinationProductId: null,
-        matchMethod: null,
-        matched: false,
+        destinationProductId,
+        matchMethod: article ? 'sku_passthrough' : 'name_passthrough',
+        matched: true,
+        ...lineExtras,
       };
     }
 
@@ -185,6 +208,7 @@ export class ExportProductService {
       destinationProductId: mockId,
       matchMethod: 'exact_supplier_article',
       matched: true,
+      ...lineExtras,
     };
   }
 }

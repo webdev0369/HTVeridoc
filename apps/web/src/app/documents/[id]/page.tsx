@@ -14,6 +14,7 @@ import {
   type PdfHighlight,
 } from '@/components/pdf-viewer';
 import { LineItemsTable } from '@/components/line-items-table';
+import { ExportStatusBanner } from '@/components/export-status-banner';
 import { ReviewActions } from '@/components/review-actions';
 import {
   ProcessingSidebar,
@@ -41,6 +42,8 @@ import {
 } from '@/lib/review-types';
 import type {
   DocumentDto,
+  DocumentExportStatusDto,
+  EditorLinkDto,
   ExtractionDto,
   ExtractionLineItemDto,
   FieldConfigResponse,
@@ -202,6 +205,17 @@ export default function DocumentDetailPage() {
     enabled: Boolean(data?.documentType),
   });
 
+  const exportStatusQuery = useQuery({
+    queryKey: ['export-status', id],
+    queryFn: () =>
+      apiFetch<DocumentExportStatusDto>(`/documents/${id}/export`),
+    enabled:
+      Boolean(id) &&
+      Boolean(data) &&
+      ['EXPORTING', 'EXPORTED', 'EXPORT_FAILED'].includes(data?.status ?? ''),
+    refetchInterval: () => (data?.status === 'EXPORTING' ? 1200 : false),
+  });
+
   const revalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -217,6 +231,7 @@ export default function DocumentDetailPage() {
     queryClient.invalidateQueries({ queryKey: ['extraction', id] });
     queryClient.invalidateQueries({ queryKey: ['validation', id] });
     queryClient.invalidateQueries({ queryKey: ['events', id] });
+    queryClient.invalidateQueries({ queryKey: ['export-status', id] });
     queryClient.invalidateQueries({ queryKey: ['documents'] });
   };
 
@@ -293,16 +308,45 @@ export default function DocumentDetailPage() {
   const approveMutation = useMutation({
     mutationFn: () =>
       apiFetch<DocumentDto>(`/documents/${id}/approve`, { method: 'POST' }),
-    onSuccess: (doc) => {
+    onSuccess: () => {
       invalidateDoc();
-      toast.success(
-        doc.status === 'EXPORTING' || doc.status === 'EXPORTED'
-          ? 'Approved — exporting…'
-          : 'Document approved',
-      );
+      toast.success('Document approved');
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : 'Approve failed');
+    },
+  });
+
+  const retryExportMutation = useMutation({
+    mutationFn: () =>
+      apiFetch(`/documents/${id}/export/retry`, { method: 'POST' }),
+    onSuccess: () => {
+      invalidateDoc();
+      toast.success('Export retry started');
+    },
+    onError: (err) => {
+      toast.error(err instanceof ApiError ? err.message : 'Retry failed');
+    },
+  });
+
+  const editorLinkMutation = useMutation({
+    mutationFn: () =>
+      apiFetch<EditorLinkDto>('/integrations/handoff/editor-link', {
+        method: 'POST',
+        body: JSON.stringify({ documentId: id }),
+      }),
+    onSuccess: async (data) => {
+      try {
+        await navigator.clipboard.writeText(data.url);
+        toast.success('Editor link copied — share with other systems');
+      } catch {
+        toast.message('Editor link ready', { description: data.url });
+      }
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.message : 'Could not create editor link',
+      );
     },
   });
 
@@ -382,6 +426,9 @@ export default function DocumentDetailPage() {
       }
       if ('baseMeasurementUnit' in patch) {
         body.baseMeasurementUnit = patch.baseMeasurementUnit;
+      }
+      if ('baseContentQuantity' in patch) {
+        body.baseContentQuantity = toApiScalar(patch.baseContentQuantity);
       }
       if ('pricePerBaseUnit' in patch) {
         body.pricePerBaseUnit = toApiScalar(patch.pricePerBaseUnit);
@@ -580,6 +627,8 @@ export default function DocumentDetailPage() {
       tone: selection.tone,
       label: selection.label,
       value: selection.value,
+      anchorHints:
+        selection.type === 'line' ? selection.anchorHints : undefined,
     };
   }, [selection, pdfPage]);
 
@@ -796,34 +845,37 @@ export default function DocumentDetailPage() {
 
   const reviewFooter =
     (canStartReview || canApprove || canReject || canReopen) && (
-    <ReviewActions
-      stacked
-      canStartReview={Boolean(canStartReview)}
-      canApprove={Boolean(canApprove)}
-      canReject={Boolean(canReject)}
-      canReopen={Boolean(canReopen)}
-      approveDisabled={
-        requiredIncomplete.length > 0 || confirmationBlockers.length > 0
-      }
-      approveDisabledReason={
-        confirmationBlockers.length
-          ? `Fix ${confirmationBlockers.length} confirmation blocker(s) first`
-          : requiredIncomplete.length
-            ? `Required: ${requiredIncomplete.join(', ')}`
-            : undefined
-      }
-      busy={reviewBusy}
-      onStartReview={() => startReviewMutation.mutate()}
-      onApprove={() => approveMutation.mutate()}
-      onReject={(reason) => rejectMutation.mutate(reason)}
-      onReopen={() => reopenMutation.mutate()}
-      error={
-        startReviewMutation.error ||
-        approveMutation.error ||
-        rejectMutation.error ||
-        reopenMutation.error
-      }
-    />
+    <div className="space-y-0">
+      <ReviewActions
+        stacked
+        canStartReview={Boolean(canStartReview)}
+        canApprove={Boolean(canApprove)}
+        canReject={Boolean(canReject)}
+        canReopen={Boolean(canReopen)}
+        approveDisabled={
+          requiredIncomplete.length > 0 ||
+          confirmationBlockers.length > 0
+        }
+        approveDisabledReason={
+          confirmationBlockers.length
+            ? `Fix ${confirmationBlockers.length} confirmation blocker(s) first`
+            : requiredIncomplete.length
+              ? `Required: ${requiredIncomplete.join(', ')}`
+              : undefined
+        }
+        busy={reviewBusy}
+        onStartReview={() => startReviewMutation.mutate()}
+        onApprove={() => approveMutation.mutate()}
+        onReject={(reason) => rejectMutation.mutate(reason)}
+        onReopen={() => reopenMutation.mutate()}
+        error={
+          startReviewMutation.error ||
+          approveMutation.error ||
+          rejectMutation.error ||
+          reopenMutation.error
+        }
+      />
+    </div>
   );
 
   return (
@@ -845,6 +897,17 @@ export default function DocumentDetailPage() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            disabled={editorLinkMutation.isPending}
+            onClick={() => editorLinkMutation.mutate()}
+            className="text-slate-300 hover:bg-white/5 hover:text-white"
+            title="Copy secure link for other systems to open this review"
+          >
+            {editorLinkMutation.isPending ? 'Link…' : 'Copy editor link'}
+          </Button>
           {canRevalidate && (
             <Button
               type="button"
@@ -883,6 +946,16 @@ export default function DocumentDetailPage() {
             : 'Something went wrong'}
         </div>
       )}
+
+      <ExportStatusBanner
+        status={exportStatusQuery.data}
+        canRetry={
+          data.status === 'EXPORT_FAILED' &&
+          hasPerm(user?.permissions, 'document.approve')
+        }
+        retrying={retryExportMutation.isPending}
+        onRetry={() => retryExportMutation.mutate()}
+      />
 
       {/* Rossum layout: fields left | PDF top-right + line table bottom-right */}
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)]">

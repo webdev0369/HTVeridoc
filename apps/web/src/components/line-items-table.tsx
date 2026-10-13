@@ -11,7 +11,9 @@ import { parseLocaleNumber } from '@/lib/parse-locale-number';
 import {
   getLineColumnValue,
   LINE_REVIEW_COLUMN_LABELS,
+  lineAnchorHints,
   lineSelectionLabel,
+  linesHaveBaseContentQuantity,
   linesHaveBaseMeasurementUnit,
   linesNeedStocktakingPerBase,
   type LineReviewColumn,
@@ -30,6 +32,7 @@ type ColKey =
   | 'stocktakingPrice'
   | 'stPerPu'
   | 'baseUnit'
+  | 'baseContent'
   | 'pricePerBase'
   | 'stPerBase'
   | 'discount'
@@ -48,6 +51,7 @@ const DEFAULT_WIDTHS: Record<ColKey, number> = {
   stocktakingPrice: 120,
   stPerPu: 88,
   baseUnit: 88,
+  baseContent: 96,
   pricePerBase: 100,
   stPerBase: 96,
   discount: 72,
@@ -67,6 +71,7 @@ const MIN_WIDTHS: Record<ColKey, number> = {
   stocktakingPrice: 80,
   stPerPu: 64,
   baseUnit: 64,
+  baseContent: 64,
   pricePerBase: 72,
   stPerBase: 64,
   discount: 56,
@@ -86,6 +91,7 @@ const COLS: { key: ColKey; label: string; align?: 'left' | 'right' }[] = [
   { key: 'stocktakingPrice', label: 'Stocktaking price', align: 'right' },
   { key: 'stPerPu', label: 'ST qty / PU', align: 'right' },
   { key: 'baseUnit', label: 'Base unit' },
+  { key: 'baseContent', label: 'Content / ST', align: 'right' },
   { key: 'pricePerBase', label: 'Price / base', align: 'right' },
   { key: 'stPerBase', label: 'ST qty / base', align: 'right' },
   { key: 'discount', label: 'Disc.', align: 'right' },
@@ -94,19 +100,30 @@ const COLS: { key: ColKey; label: string; align?: 'left' | 'right' }[] = [
 ];
 
 const BASE_COL_KEYS = new Set<ColKey>(['baseUnit', 'pricePerBase']);
+const BASE_CONTENT_COL_KEY: ColKey = 'baseContent';
 const ST_PER_BASE_COL_KEY: ColKey = 'stPerBase';
 
 function numToInput(value: number | null | undefined) {
   return value == null ? '' : String(value);
 }
 
+function cellHasValue(value: string | number | null | undefined): boolean {
+  if (value == null) return false;
+  if (typeof value === 'number') return Number.isFinite(value);
+  return value.trim() !== '';
+}
+
+/** Tick only when the cell has a value (or was edited with a value). Empty cells never look "confirmed". */
 function CellTick({
   confidence,
   edited,
+  hasValue,
 }: {
   confidence: number | null;
   edited: boolean;
+  hasValue: boolean;
 }) {
+  if (!hasValue) return null;
   if (edited) {
     return (
       <span className="ml-1 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[9px] text-white">
@@ -161,6 +178,10 @@ export function LineItemsTable({
     () => linesHaveBaseMeasurementUnit(lineItems),
     [lineItems],
   );
+  const showBaseContentCol = useMemo(
+    () => linesHaveBaseContentQuantity(lineItems),
+    [lineItems],
+  );
   const showStPerBaseCol = useMemo(
     () => linesNeedStocktakingPerBase(lineItems),
     [lineItems],
@@ -169,10 +190,11 @@ export function LineItemsTable({
     () =>
       COLS.filter((col) => {
         if (BASE_COL_KEYS.has(col.key)) return showBaseCols;
+        if (col.key === BASE_CONTENT_COL_KEY) return showBaseContentCol;
         if (col.key === ST_PER_BASE_COL_KEY) return showStPerBaseCol;
         return true;
       }),
-    [showBaseCols, showStPerBaseCol],
+    [showBaseCols, showBaseContentCol, showStPerBaseCol],
   );
   const mapColumns = useMemo(
     () => mappableLineColumns(lineItems),
@@ -433,6 +455,7 @@ export function LineItemsTable({
                     : null
                 }
                 showBaseCols={showBaseCols}
+                showBaseContentCol={showBaseContentCol}
                 showStPerBaseCol={showStPerBaseCol}
                 issue={issueByLine.get(line.id)}
                 disabled={saving}
@@ -445,6 +468,7 @@ export function LineItemsTable({
                     value: getLineColumnValue(line, column),
                     page: line.source?.page ?? null,
                     boundingBox: line.source?.boundingBox,
+                    anchorHints: lineAnchorHints(line),
                     tone: issueByLine.has(line.id)
                       ? 'error'
                       : line.isUserEdited
@@ -567,6 +591,7 @@ function LineRow({
   selected,
   selectedColumn,
   showBaseCols,
+  showBaseContentCol,
   showStPerBaseCol,
   issue,
   disabled,
@@ -579,6 +604,7 @@ function LineRow({
   selected: boolean;
   selectedColumn: LineReviewColumn | null;
   showBaseCols: boolean;
+  showBaseContentCol: boolean;
   showStPerBaseCol: boolean;
   issue?: ValidationErrorDto;
   disabled?: boolean;
@@ -608,6 +634,9 @@ function LineRow({
     numToInput(line.stockTakingQuantityPerPurchaseUnit),
   );
   const [baseUnit, setBaseUnit] = useState(line.baseMeasurementUnit ?? '');
+  const [baseContent, setBaseContent] = useState(
+    numToInput(line.baseContentQuantity),
+  );
   const [pricePerBase, setPricePerBase] = useState(
     numToInput(line.pricePerBaseUnit),
   );
@@ -634,6 +663,7 @@ function LineRow({
     line.stocktakingUnitPrice,
     line.stockTakingQuantityPerPurchaseUnit,
     line.baseMeasurementUnit,
+    line.baseContentQuantity,
     line.pricePerBaseUnit,
     line.stockTakingQuantityPerBaseMeasurementUnit,
     line.discount,
@@ -652,6 +682,7 @@ function LineRow({
     setStocktakingPrice(numToInput(line.stocktakingUnitPrice));
     setStPerPu(numToInput(line.stockTakingQuantityPerPurchaseUnit));
     setBaseUnit(line.baseMeasurementUnit ?? '');
+    setBaseContent(numToInput(line.baseContentQuantity));
     setPricePerBase(numToInput(line.pricePerBaseUnit));
     setStPerBase(numToInput(line.stockTakingQuantityPerBaseMeasurementUnit));
     setDiscount(numToInput(line.discount));
@@ -675,6 +706,7 @@ function LineRow({
     const nextPrice = parseLocaleNumber(purchasePrice);
     const nextStockPrice = parseLocaleNumber(stocktakingPrice);
     const nextStPerPu = parseLocaleNumber(stPerPu);
+    const nextBaseContent = parseLocaleNumber(baseContent);
     const nextPricePerBase = parseLocaleNumber(pricePerBase);
     const nextStPerBase = parseLocaleNumber(stPerBase);
     const nextDisc = parseLocaleNumber(discount);
@@ -713,6 +745,9 @@ function LineRow({
     }
     if (nextBaseUnit !== (line.baseMeasurementUnit ?? null)) {
       patch.baseMeasurementUnit = nextBaseUnit;
+    }
+    if (nextBaseContent !== (line.baseContentQuantity ?? null)) {
+      patch.baseContentQuantity = nextBaseContent;
     }
     if (nextPricePerBase !== (line.pricePerBaseUnit ?? null)) {
       patch.pricePerBaseUnit = nextPricePerBase;
@@ -809,7 +844,11 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center">
           {cellInput('articleNumber', articleNumber, setArticleNumber)}
-          <CellTick confidence={line.confidence} edited={line.isUserEdited} />
+          <CellTick
+            confidence={line.confidence}
+            edited={line.isUserEdited}
+            hasValue={cellHasValue(articleNumber)}
+          />
         </div>
       </td>
       <td
@@ -818,7 +857,11 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center">
           {cellInput('description', description, setDescription)}
-          <CellTick confidence={line.confidence} edited={line.isUserEdited} />
+          <CellTick
+            confidence={line.confidence}
+            edited={line.isUserEdited}
+            hasValue={cellHasValue(description)}
+          />
         </div>
       </td>
       <td
@@ -833,7 +876,11 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center justify-end">
           {cellInput('purchaseQuantity', purchaseQty, setPurchaseQty, 'right')}
-          <CellTick confidence={line.confidence} edited={line.isUserEdited} />
+          <CellTick
+            confidence={line.confidence}
+            edited={line.isUserEdited}
+            hasValue={cellHasValue(purchaseQty)}
+          />
         </div>
       </td>
       <td
@@ -842,7 +889,11 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center justify-end">
           {cellInput('unitPrice', purchasePrice, setPurchasePrice, 'right')}
-          <CellTick confidence={line.confidence} edited={line.isUserEdited} />
+          <CellTick
+            confidence={line.confidence}
+            edited={line.isUserEdited}
+            hasValue={cellHasValue(purchasePrice)}
+          />
         </div>
       </td>
       <td
@@ -891,27 +942,42 @@ function LineRow({
         </div>
       </td>
       {showBaseCols ? (
-        <>
-          <td
-            className="overflow-hidden border-b border-white/5 px-3 py-2"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {cellInput('baseMeasurementUnit', baseUnit, setBaseUnit)}
-          </td>
-          <td
-            className="overflow-hidden border-b border-white/5 px-3 py-2"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="flex min-w-0 items-center justify-end">
-              {cellInput(
-                'pricePerBaseUnit',
-                pricePerBase,
-                setPricePerBase,
-                'right',
-              )}
-            </div>
-          </td>
-        </>
+        <td
+          className="overflow-hidden border-b border-white/5 px-3 py-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {cellInput('baseMeasurementUnit', baseUnit, setBaseUnit)}
+        </td>
+      ) : null}
+      {showBaseContentCol ? (
+        <td
+          className="overflow-hidden border-b border-white/5 px-3 py-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex min-w-0 items-center justify-end">
+            {cellInput(
+              'baseContentQuantity',
+              baseContent,
+              setBaseContent,
+              'right',
+            )}
+          </div>
+        </td>
+      ) : null}
+      {showBaseCols ? (
+        <td
+          className="overflow-hidden border-b border-white/5 px-3 py-2"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div className="flex min-w-0 items-center justify-end">
+            {cellInput(
+              'pricePerBaseUnit',
+              pricePerBase,
+              setPricePerBase,
+              'right',
+            )}
+          </div>
+        </td>
       ) : null}
       {showStPerBaseCol ? (
         <td
@@ -940,7 +1006,11 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center justify-end">
           {cellInput('amount', amount, setAmount, 'right')}
-          <CellTick confidence={line.confidence} edited={line.isUserEdited} />
+          <CellTick
+            confidence={line.confidence}
+            edited={line.isUserEdited}
+            hasValue={cellHasValue(amount)}
+          />
         </div>
       </td>
       <td className="overflow-hidden border-b border-white/5 px-3 py-2">

@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AiModule } from '../ai/ai.module';
 import { Document } from '../documents/entities/document.entity';
 import { FieldConfigModule } from '../fields/field-config.module';
+import { OrganizationsModule } from '../organizations/organizations.module';
 import { ProcessingLogModule } from '../processing-log/processing-log.module';
 import { ValidationModule } from '../validation/validation.module';
 import { Extraction } from './entities/extraction.entity';
@@ -25,6 +26,7 @@ import { ExtractionService } from './extraction.service';
     AiModule,
     ProcessingLogModule,
     FieldConfigModule,
+    OrganizationsModule,
     forwardRef(() => ValidationModule),
   ],
   controllers: [ExtractionController],

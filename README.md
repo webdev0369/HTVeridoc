@@ -112,6 +112,15 @@ On a VPS: install Docker, copy the repo, set `.env` with your public hostnames/H
 - `GET /documents/:id/extraction` returns `fields`, `lineItems`, and `summary`
 - Reprocess existing documents after `pnpm migration:run` to populate structured rows
 
+### Handoff (Approve → webhook)
+
+After parsing and review, **Approve** notifies other systems via webhooks (extraction payload + optional editor link). See `docs/handoff-webhooks-editor.md`.
+
+Configure under **Settings → Webhooks**.
+
+Legacy TotalCtrl store-orders export is not part of the product flow (`docs/export-destination-contract.md`).
+
+
 ## Storage layout
 
 ```text

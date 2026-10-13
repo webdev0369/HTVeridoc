@@ -18,19 +18,81 @@ import {
 } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { cn } from '@/lib/utils';
 
 const schema = z.object({
-  organizationName: z.string().min(2),
+  organizationName: z
+    .string()
+    .trim()
+    .min(2, 'Organization name must be at least 2 characters')
+    .max(255, 'Organization name must be at most 255 characters'),
   organizationSlug: z
     .string()
-    .min(2)
-    .regex(/^[a-z0-9-]+$/, 'Lowercase letters, numbers, hyphens only'),
-  name: z.string().min(2),
-  email: z.string().email(),
-  password: z.string().min(8),
+    .trim()
+    .min(2, 'Slug must be at least 2 characters')
+    .max(100, 'Slug must be at most 100 characters')
+    .regex(
+      /^[a-z0-9-]+$/,
+      'Use lowercase letters, numbers, and hyphens only (e.g. acme-corp)',
+    ),
+  name: z
+    .string()
+    .trim()
+    .min(2, 'Your name must be at least 2 characters')
+    .max(255, 'Your name must be at most 255 characters'),
+  email: z
+    .string()
+    .trim()
+    .min(1, 'Email is required')
+    .email('Enter a valid email address'),
+  password: z
+    .string()
+    .min(8, 'Password must be at least 8 characters')
+    .max(128, 'Password must be at most 128 characters'),
 });
 
 type FormValues = z.infer<typeof schema>;
+
+const FIELDS: {
+  name: keyof FormValues;
+  label: string;
+  type: string;
+  autoComplete?: string;
+  hint?: string;
+}[] = [
+  {
+    name: 'organizationName',
+    label: 'Organization name',
+    type: 'text',
+    autoComplete: 'organization',
+  },
+  {
+    name: 'organizationSlug',
+    label: 'Slug',
+    type: 'text',
+    autoComplete: 'off',
+    hint: 'Used in URLs — lowercase letters, numbers, and hyphens.',
+  },
+  {
+    name: 'name',
+    label: 'Your name',
+    type: 'text',
+    autoComplete: 'name',
+  },
+  {
+    name: 'email',
+    label: 'Email',
+    type: 'email',
+    autoComplete: 'email',
+  },
+  {
+    name: 'password',
+    label: 'Password',
+    type: 'password',
+    autoComplete: 'new-password',
+    hint: 'At least 8 characters.',
+  },
+];
 
 export default function RegisterPage() {
   const { register: registerUser } = useAuth();
@@ -39,8 +101,12 @@ export default function RegisterPage() {
   const {
     register,
     handleSubmit,
-    formState: { isSubmitting },
-  } = useForm<FormValues>({ resolver: zodResolver(schema) });
+    formState: { isSubmitting, errors, isSubmitted },
+  } = useForm<FormValues>({
+    resolver: zodResolver(schema),
+    mode: 'onBlur',
+    reValidateMode: 'onChange',
+  });
 
   const onSubmit = handleSubmit(async (values) => {
     setError(null);
@@ -73,26 +139,61 @@ export default function RegisterPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={onSubmit} className="grid gap-4">
-            {(
-              [
-                ['organizationName', 'Organization name', 'text'],
-                ['organizationSlug', 'Slug', 'text'],
-                ['name', 'Your name', 'text'],
-                ['email', 'Email', 'email'],
-                ['password', 'Password', 'password'],
-              ] as const
-            ).map(([field, label, type]) => (
-              <div key={field} className="space-y-2">
-                <Label htmlFor={field}>{label}</Label>
-                <Input id={field} type={type} {...register(field)} />
-              </div>
-            ))}
+          <form onSubmit={onSubmit} className="grid gap-4" noValidate>
+            {FIELDS.map((field) => {
+              const fieldError = errors[field.name];
+              const describedBy = fieldError
+                ? `${field.name}-error`
+                : field.hint
+                  ? `${field.name}-hint`
+                  : undefined;
+              return (
+                <div key={field.name} className="space-y-2">
+                  <Label htmlFor={field.name}>{field.label}</Label>
+                  <Input
+                    id={field.name}
+                    type={field.type}
+                    autoComplete={field.autoComplete}
+                    aria-invalid={Boolean(fieldError)}
+                    aria-describedby={describedBy}
+                    className={cn(
+                      fieldError &&
+                        'border-destructive focus-visible:ring-destructive/30',
+                    )}
+                    {...register(field.name)}
+                  />
+                  {fieldError ? (
+                    <p
+                      id={`${field.name}-error`}
+                      role="alert"
+                      className="text-sm text-destructive"
+                    >
+                      {fieldError.message}
+                    </p>
+                  ) : field.hint ? (
+                    <p
+                      id={`${field.name}-hint`}
+                      className="text-xs text-muted-foreground"
+                    >
+                      {field.hint}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            })}
             {error && (
-              <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+              <p
+                role="alert"
+                className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
                 {error}
               </p>
             )}
+            {isSubmitted && Object.keys(errors).length > 0 && !error ? (
+              <p role="alert" className="text-sm text-destructive">
+                Please fix the highlighted fields and try again.
+              </p>
+            ) : null}
             <Button type="submit" disabled={isSubmitting} className="w-full">
               {isSubmitting ? 'Creating…' : 'Create account'}
             </Button>

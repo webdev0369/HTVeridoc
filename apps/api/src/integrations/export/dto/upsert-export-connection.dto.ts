@@ -44,4 +44,18 @@ export class UpsertExportConnectionDto {
   @IsOptional()
   @IsBoolean()
   clearPassword?: boolean;
+
+  /** TotalCtrl inventory UUID for POST /orders/store-orders. */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  inventoryId?: string;
+
+  /**
+   * When true, Live create uses POST /partner/v1/orders/schedule
+   * (inventory may come from Partner OAuth).
+   */
+  @IsOptional()
+  @IsBoolean()
+  usePartnerSchedule?: boolean;
 }

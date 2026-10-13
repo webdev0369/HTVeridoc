@@ -21,6 +21,7 @@ const LINE_COLUMNS = [
   'stocktakingUnitPrice',
   'stockTakingQuantityPerPurchaseUnit',
   'baseMeasurementUnit',
+  'baseContentQuantity',
   'pricePerBaseUnit',
   'stockTakingQuantityPerBaseMeasurementUnit',
   'discount',

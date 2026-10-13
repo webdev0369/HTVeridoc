@@ -12,6 +12,11 @@ export interface PdfHighlight {
   tone?: HighlightTone;
   label?: string;
   value?: string | null;
+  /**
+   * Disambiguate short/repeated PDF tokens (e.g. "PK" on many rows).
+   * Prefer matches on the same visual line as these strings (position, item code).
+   */
+  anchorHints?: string[];
 }
 
 export interface PdfTextItem {
@@ -69,6 +74,74 @@ function normalizeMatch(s: string) {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
 
+/** Pack / case units that may sit beside a qty in one PDF token ("10 PK"). */
+const PACK_UNIT_TOKEN =
+  /^(PK|STK|KRT|CS|FL|EA|PCE|PCS|BOX|CSE|SKK|RLL|POS|ENH)$/i;
+
+/**
+ * Locale-aware number parse for PDF tokens ("75,49" / "1.234,56" / "75.49").
+ * Allows "10 PK" / "10PK" (qty + pack unit). Rejects product sizes like "500ml".
+ */
+function parseHighlightNumber(s: string | null | undefined): number | null {
+  if (s == null) return null;
+  const original = s.trim();
+  if (!original) return null;
+
+  // Qty + pack unit in one glyph run: "10 PK", "10PK" (not "500ml").
+  const withUnit =
+    /^(-?\d+(?:[.,]\d+)?)(?:\s+([A-Za-zæøåÆØÅ.]+)|([A-ZÆØÅ]{2,4}))$/u.exec(
+      original,
+    );
+  if (withUnit) {
+    const unit = (withUnit[2] || withUnit[3] || '').trim();
+    if (unit && !PACK_UNIT_TOKEN.test(unit)) return null;
+    return parseHighlightNumber(withUnit[1]);
+  }
+
+  const t = original.replace(/\s/g, '');
+  // Glued product sizes: 500ml, 750ML, 1l
+  if (/^\d+[.,]?\d*[a-zA-ZæøåÆØÅ]+$/u.test(t) && !PACK_UNIT_TOKEN.test(t.replace(/^\d+[.,]?\d*/, ''))) {
+    return null;
+  }
+  if (/[a-zA-ZæøåÆØÅ]/u.test(t)) return null;
+  if (!/^-?\d/.test(t)) return null;
+  let nStr = t;
+  if (nStr.includes(',') && nStr.includes('.')) {
+    nStr = nStr.replace(/\./g, '').replace(',', '.');
+  } else if (nStr.includes(',')) {
+    nStr = nStr.replace(',', '.');
+  }
+  if (!/^-?\d+(?:\.\d+)?$/.test(nStr)) return null;
+  const n = Number(nStr);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Box covering only the numeric part of "10 PK" / "75,49". */
+function numberOnlyBox(item: PdfTextItem, valueNum: number): BoundingBox {
+  const original = item.str.trim();
+  const m = /^(-?\d+(?:[.,]\d+)?)/u.exec(original);
+  if (m && numbersEqual(parseHighlightNumber(m[1]) ?? NaN, valueNum)) {
+    const ratio = m[1].length / Math.max(original.length, 1);
+    return {
+      x: item.x,
+      y: item.y,
+      width: Math.max(0.004, item.width * Math.min(1, ratio + 0.02)),
+      height: item.height,
+    };
+  }
+  return {
+    x: item.x,
+    y: item.y,
+    width: item.width,
+    height: item.height,
+  };
+}
+
+function numbersEqual(a: number, b: number) {
+  const scale = Math.max(1, Math.abs(a), Math.abs(b));
+  return Math.abs(a - b) <= 1e-6 * scale;
+}
+
 function boxArea(box: BoundingBox) {
   return box.width * box.height;
 }
@@ -111,125 +184,295 @@ function sameLine(a: PdfTextItem, b: PdfTextItem) {
   return Math.abs(b.y - a.y) <= Math.max(a.height, 0.012) * 1.6;
 }
 
+function boxCenterY(box: BoundingBox) {
+  return box.y + box.height / 2;
+}
+
+/** PDF text item for line position / item code (row identity). */
+function findAnchorItem(
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): PdfTextItem | null {
+  if (!hints?.length || textItems.length === 0) return null;
+  // Prefer article/item code over position — position digits can collide with qtys.
+  const ordered = [...hints].sort((a, b) => b.length - a.length);
+  for (const hint of ordered) {
+    const needle = normalizeMatch(hint);
+    if (!needle || needle.length < 1) continue;
+    for (const item of textItems) {
+      if (normalizeMatch(item.str) === needle) return item;
+    }
+  }
+  return null;
+}
+
+/** Y of the PDF row that contains position / article code (disambiguates "PK"). */
+function findAnchorY(
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): number | null {
+  const item = findAnchorItem(textItems, hints);
+  return item ? item.y + item.height / 2 : null;
+}
+
+function findAnchorBox(
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): BoundingBox | null {
+  const item = findAnchorItem(textItems, hints);
+  if (!item) return null;
+  return {
+    x: item.x,
+    y: item.y,
+    width: Math.max(item.width, 0.08),
+    height: item.height,
+  };
+}
+
+/**
+ * When the value is a number, find it on the same visual row as the line
+ * anchor — prefer the right-hand qty column ("10 PK"), never the Pos "200".
+ */
+function findNumericOnAnchorRow(
+  textItems: PdfTextItem[],
+  valueNum: number,
+  hints: string[] | null | undefined,
+): BoundingBox | null {
+  const anchor = findAnchorItem(textItems, hints);
+  if (!anchor) return null;
+
+  const onRow = textItems.filter((item) => sameLine(anchor, item));
+  const hits: BoundingBox[] = [];
+  for (const item of onRow) {
+    const n = parseHighlightNumber(item.str);
+    if (n == null || !numbersEqual(n, valueNum)) continue;
+    // Skip the anchor tokens themselves (line # / article code).
+    if (hints?.some((h) => normalizeMatch(h) === normalizeMatch(item.str))) {
+      continue;
+    }
+    hits.push(numberOnlyBox(item, valueNum));
+  }
+  if (hits.length === 0) return null;
+  // Qty / pakning columns sit to the right of description.
+  hits.sort((a, b) => b.x + b.width / 2 - (a.x + a.width / 2));
+  return hits[0];
+}
+
 /**
  * Find the tightest page region for a field value.
- * Prefer exact / short spans so a date like "10.02.22" does not highlight
- * the whole "Planlagt leveringsdag: Torsdag 10.02.22" line.
+ *
+ * Numeric values never use substring search ("45" must not match inside
+ * "754,90"). Repeated tokens ("PK", "10") prefer the row from anchorHints
+ * (line position / item code) over a possibly-wrong AI bounding box.
  */
 function findValueBoxes(
   textItems: PdfTextItem[],
   value: string | null | undefined,
+  opts?: {
+    near?: BoundingBox | null;
+    anchorHints?: string[] | null;
+  },
 ): BoundingBox[] {
-  const needle = normalizeMatch(value ?? '');
-  if (!needle || needle.length < 2 || textItems.length === 0) return [];
+  const raw = (value ?? '').trim();
+  if (!raw || textItems.length === 0) return [];
+
+  const needle = normalizeMatch(raw);
+  const needleNum = parseHighlightNumber(raw);
+  const isNumeric = needleNum != null;
+
+  if (!isNumeric && needle.length < 2) return [];
 
   type Scored = { score: number; box: BoundingBox };
   const scored: Scored[] = [];
 
-  // 1) Exact single-token match
-  for (const item of textItems) {
-    if (normalizeMatch(item.str) === needle) {
-      scored.push({
-        score: 10_000 + needle.length,
-        box: {
-          x: item.x,
-          y: item.y,
-          width: item.width,
-          height: item.height,
-        },
-      });
-    }
-  }
+  const pushItem = (item: PdfTextItem, score: number) => {
+    scored.push({
+      score,
+      box: {
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height,
+      },
+    });
+  };
 
-  // 2) Needle contained in one token → highlight only that substring width
-  for (const item of textItems) {
-    const hay = normalizeMatch(item.str);
-    if (hay === needle || !hay.includes(needle)) continue;
-    const box = substringBox(item, needle);
-    if (box) {
-      scored.push({ score: 5_000 + needle.length, box });
-    }
-  }
-
-  // 3) Exact / contained match across consecutive same-line tokens —
-  //    box only the tokens that form the needle, not the whole line.
-  for (let i = 0; i < textItems.length; i++) {
-    const window: PdfTextItem[] = [textItems[i]];
-    let joined = normalizeMatch(textItems[i].str);
-
-    for (let j = i + 1; j < Math.min(i + 10, textItems.length); j++) {
-      if (!sameLine(textItems[i], textItems[j])) break;
-      window.push(textItems[j]);
-      joined = normalizeMatch(
-        window.map((t) => t.str).join(' '),
-      );
-
-      if (joined === needle) {
+  if (isNumeric) {
+    // Exact numeric equality only (locale-aware) — never substring of larger amounts.
+    // Also accepts "10 PK" and highlights only the "10".
+    for (const item of textItems) {
+      const n = parseHighlightNumber(item.str);
+      if (n != null && numbersEqual(n, needleNum)) {
         scored.push({
-          score: 9_000 + needle.length,
-          box: mergeBoxes(window),
+          score: 10_000 + String(n).length,
+          box: numberOnlyBox(item, needleNum),
         });
-        break;
       }
-
-      // Minimal sub-window that contains the needle
-      if (joined.includes(needle) && joined.length > needle.length) {
-        for (let a = 0; a < window.length; a++) {
-          for (let b = a; b < window.length; b++) {
-            const slice = window.slice(a, b + 1);
-            const part = normalizeMatch(slice.map((t) => t.str).join(' '));
-            if (part === needle) {
-              scored.push({
-                score: 8_500 + needle.length,
-                box: mergeBoxes(slice),
-              });
-            } else if (part.includes(needle) && part.length <= needle.length + 2) {
-              scored.push({
-                score: 4_000 + needle.length,
-                box: mergeBoxes(slice),
-              });
-            }
-          }
-        }
-        break;
-      }
-
-      if (joined.length > needle.length + 24) break;
     }
-  }
+    // Multi-token: "10"+"PK", "75"+",49"
+    for (let i = 0; i < textItems.length; i++) {
+      const window: PdfTextItem[] = [textItems[i]];
+      for (let j = i + 1; j < Math.min(i + 4, textItems.length); j++) {
+        if (!sameLine(textItems[i], textItems[j])) break;
+        window.push(textItems[j]);
+        const joinedSpace = window.map((t) => t.str).join(' ');
+        const joinedTight = window.map((t) => t.str).join('');
+        const n =
+          parseHighlightNumber(joinedSpace) ??
+          parseHighlightNumber(joinedTight);
+        if (n != null && numbersEqual(n, needleNum)) {
+          // Prefer boxing just the leading numeric token when present.
+          const lead = parseHighlightNumber(window[0].str);
+          scored.push({
+            score: 9_500 + String(n).length,
+            box:
+              lead != null && numbersEqual(lead, needleNum)
+                ? numberOnlyBox(window[0], needleNum)
+                : mergeBoxes(window),
+          });
+          break;
+        }
+      }
+    }
+  } else {
+    // 1) Exact single-token match
+    for (const item of textItems) {
+      if (normalizeMatch(item.str) === needle) {
+        pushItem(item, 10_000 + needle.length);
+      }
+    }
 
-  // 4) Last resort: short fragment contained in needle (avoid tiny noise)
-  if (scored.length === 0) {
+    // 2) Needle contained in one token → highlight only that substring width
     for (const item of textItems) {
       const hay = normalizeMatch(item.str);
-      if (
-        needle.length >= 4 &&
-        hay.length >= 4 &&
-        needle.includes(hay) &&
-        hay.length >= needle.length * 0.5
-      ) {
-        scored.push({
-          score: 500 + hay.length,
-          box: {
-            x: item.x,
-            y: item.y,
-            width: item.width,
-            height: item.height,
-          },
-        });
+      if (hay === needle || !hay.includes(needle)) continue;
+      // Avoid matching short unit tokens inside longer words
+      if (needle.length <= 3 && hay.length > needle.length + 1) continue;
+      const box = substringBox(item, needle);
+      if (box) scored.push({ score: 5_000 + needle.length, box });
+    }
+
+    // 3) Exact match across consecutive same-line tokens
+    for (let i = 0; i < textItems.length; i++) {
+      const window: PdfTextItem[] = [textItems[i]];
+      let joined = normalizeMatch(textItems[i].str);
+
+      for (let j = i + 1; j < Math.min(i + 10, textItems.length); j++) {
+        if (!sameLine(textItems[i], textItems[j])) break;
+        window.push(textItems[j]);
+        joined = normalizeMatch(window.map((t) => t.str).join(' '));
+
+        if (joined === needle) {
+          scored.push({
+            score: 9_000 + needle.length,
+            box: mergeBoxes(window),
+          });
+          break;
+        }
+
+        if (joined.includes(needle) && joined.length > needle.length) {
+          for (let a = 0; a < window.length; a++) {
+            for (let b = a; b < window.length; b++) {
+              const slice = window.slice(a, b + 1);
+              const part = normalizeMatch(slice.map((t) => t.str).join(' '));
+              if (part === needle) {
+                scored.push({
+                  score: 8_500 + needle.length,
+                  box: mergeBoxes(slice),
+                });
+              }
+            }
+          }
+          break;
+        }
+
+        if (joined.length > needle.length + 24) break;
       }
     }
   }
 
   if (scored.length === 0) return [];
 
-  // Prefer higher score, then tighter boxes
-  scored.sort((a, b) => {
-    if (b.score !== a.score) return b.score - a.score;
-    return boxArea(a.box) - boxArea(b.box);
-  });
+  // Line position / item code beats a stale AI row bbox for ambiguous tokens.
+  const preferredY =
+    findAnchorY(textItems, opts?.anchorHints) ??
+    (opts?.near ? boxCenterY(opts.near) : null);
 
-  return [scored[0].box];
+  const band = Math.max(opts?.near?.height ?? 0, 0.02) * 3;
+
+  const rank = (list: Scored[]) =>
+    [...list].sort((a, b) => {
+      if (preferredY != null) {
+        const da = Math.abs(boxCenterY(a.box) - preferredY);
+        const db = Math.abs(boxCenterY(b.box) - preferredY);
+        // Same visual row: for numbers prefer the right-hand column
+        // (qty / price / pakning) over a left-side description hit.
+        if (Math.abs(da - db) <= band * 0.5 && isNumeric) {
+          const ax = a.box.x + a.box.width / 2;
+          const bx = b.box.x + b.box.width / 2;
+          if (Math.abs(bx - ax) > 0.03) return bx - ax;
+        }
+        if (Math.abs(da - db) > 1e-6) return da - db;
+      } else if (isNumeric) {
+        const ax = a.box.x + a.box.width / 2;
+        const bx = b.box.x + b.box.width / 2;
+        if (Math.abs(bx - ax) > 0.03) return bx - ax;
+      }
+      if (b.score !== a.score) return b.score - a.score;
+      return boxArea(a.box) - boxArea(b.box);
+    });
+
+  if (preferredY != null) {
+    const inBand = scored.filter(
+      (s) => Math.abs(boxCenterY(s.box) - preferredY) <= band,
+    );
+    // Stay on the anchored row. If the printed value isn't there (derived
+    // qty), return [] so the popup parks on the position/item-code anchor.
+    if (inBand.length === 0) return [];
+    return [rank(inBand)[0].box];
+  }
+
+  return [rank(scored)[0].box];
+}
+
+/** Resolve highlight / popup anchor for a selection on a page. */
+function resolveHighlightBoxes(
+  textItems: PdfTextItem[],
+  highlight: PdfHighlight,
+): BoundingBox[] {
+  const valueNum = parseHighlightNumber(highlight.value);
+
+  // Numeric fields (stocktaking qty, prices, …): find the value on *this*
+  // line's row, preferring the qty column ("10 PK") — not Pos "200".
+  if (valueNum != null && highlight.anchorHints?.length) {
+    const onRow = findNumericOnAnchorRow(
+      textItems,
+      valueNum,
+      highlight.anchorHints,
+    );
+    if (onRow) return [onRow];
+  }
+
+  const fromText = findValueBoxes(textItems, highlight.value, {
+    near: highlight.boundingBox,
+    anchorHints: highlight.anchorHints,
+  });
+  if (fromText.length > 0) return fromText;
+
+  if (valueNum != null && highlight.anchorHints?.length) {
+    const onRow = findNumericOnAnchorRow(
+      textItems,
+      valueNum,
+      highlight.anchorHints,
+    );
+    if (onRow) return [onRow];
+  }
+
+  // Last resort: park on article/position so we stay on the correct row.
+  const anchor = findAnchorBox(textItems, highlight.anchorHints);
+  if (anchor) return [anchor];
+  if (highlight.boundingBox) return [highlight.boundingBox];
+  return [];
 }
 
 export function PdfViewer({
@@ -515,7 +758,7 @@ export function PdfViewer({
     if (!target.textItems.length && !highlight.boundingBox) return;
     lastScrollKeyRef.current = scrollKey;
 
-    const boxes = findValueBoxes(target.textItems, highlight.value);
+    const boxes = resolveHighlightBoxes(target.textItems, highlight);
     const box = boxes[0] ?? highlight.boundingBox;
     const pageEl = pageElRefs.current.get(highlight.page);
     const container = containerRef.current;
@@ -538,6 +781,7 @@ export function PdfViewer({
     highlight?.label,
     highlight?.boundingBox,
     highlight?.value,
+    highlight?.anchorHints,
     pages,
     setPage,
   ]);
@@ -555,10 +799,7 @@ export function PdfViewer({
   const matchedBoxes = useMemo(() => {
     if (!highlight || !activePageView) return [] as BoundingBox[];
     if (highlight.page !== activePageView.page) return [];
-    const fromText = findValueBoxes(activePageView.textItems, highlight.value);
-    if (fromText.length > 0) return fromText;
-    if (highlight.boundingBox) return [highlight.boundingBox];
-    return [];
+    return resolveHighlightBoxes(activePageView.textItems, highlight);
   }, [highlight, activePageView]);
 
   const primaryBox = matchedBoxes[0] ?? null;

@@ -12,6 +12,9 @@ interface JwtPayload {
   organizationId: string;
   role: RoleCode;
   permissions: PermissionCode[];
+  /** Present on handoff editor links for other systems. */
+  typ?: string;
+  documentId?: string;
 }
 
 @Injectable()
@@ -31,10 +34,10 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
 
     return {
       userId: payload.sub,
-      email: payload.email,
-      name: payload.name,
+      email: payload.email ?? 'editor-link@handoff.local',
+      name: payload.name ?? 'Editor link',
       organizationId: payload.organizationId,
-      role: payload.role,
+      role: payload.role ?? RoleCode.REVIEWER,
       permissions: payload.permissions ?? [],
     };
   }

@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash } from 'crypto';
@@ -7,6 +12,7 @@ import {
   ExportConnection,
   ExportConnectionMode,
 } from './entities/export-connection.entity';
+import { EXPORT_PATHS } from './export-contract';
 import { decryptSecret } from './secret-crypto';
 
 export interface ResolvedExportConnection {
@@ -16,6 +22,13 @@ export interface ResolvedExportConnection {
   apiKey: string | null;
   username: string | null;
   password: string | null;
+  /** TotalCtrl inventory UUID for POST /orders/store-orders. */
+  inventoryId: string | null;
+  /**
+   * When true, create via POST /partner/v1/orders/schedule
+   * (supplier/inventory may come from Partner OAuth).
+   */
+  usePartnerSchedule: boolean;
   /** Always organization — SaaS credentials are never global env. */
   source: 'organization';
 }
@@ -45,12 +58,18 @@ export class ExportClientService {
     organizationId: string,
   ): Promise<ResolvedExportConnection> {
     const row = await this.connectionsRepo.findOne({
-      where: { organizationId, isActive: true },
+      where: { organizationId },
     });
 
     if (!row) {
-      throw new Error(
-        'Export destination is not configured for this organization. An admin must connect it under Settings → Export destination.',
+      throw new NotFoundException(
+        'Export destination is not configured for this organization. Save a Sandbox or Live connection under Settings → Export destination, then try again.',
+      );
+    }
+
+    if (!row.isActive) {
+      throw new BadRequestException(
+        'Export destination is disabled for this organization. Turn on “Connection active” under Settings → Export destination (or Save connection with it checked), then test again.',
       );
     }
 
@@ -62,6 +81,8 @@ export class ExportClientService {
       apiKey: decryptSecret(row.apiKey, secret),
       username: row.username,
       password: decryptSecret(row.password, secret),
+      inventoryId: row.inventoryId ?? null,
+      usePartnerSchedule: Boolean(row.usePartnerSchedule),
       source: 'organization',
     };
   }
@@ -75,6 +96,10 @@ export class ExportClientService {
     return `mock-${kind}-${digest}`;
   }
 
+  /**
+   * Verify Live credentials against the destination contract.
+   * Sandbox always succeeds without HTTP.
+   */
   async authenticate(connection: ResolvedExportConnection): Promise<void> {
     if (connection.mode === 'mock') {
       this.logger.debug(
@@ -84,35 +109,59 @@ export class ExportClientService {
     }
 
     if (!connection.baseUrl) {
-      throw new Error('Live export mode requires a base URL');
+      throw new BadRequestException('Live export mode requires a base URL');
     }
     if (!connection.apiKey && !(connection.username && connection.password)) {
-      throw new Error(
+      throw new BadRequestException(
         'Live export mode requires an API key or username/password',
       );
     }
 
-    const url = `${connection.baseUrl.replace(/\/$/, '')}/health`;
-    try {
-      const headers = this.buildAuthHeaders(connection);
-      const res = await fetch(url, {
-        method: 'GET',
-        headers,
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!res.ok && res.status !== 404) {
-        throw new Error(`Export auth/health returned HTTP ${res.status}`);
+    const headers = this.buildAuthHeaders(connection);
+    const base = connection.baseUrl.replace(/\/$/, '');
+    const candidates = [
+      `${base}${EXPORT_PATHS.health}`,
+      `${base}${EXPORT_PATHS.healthReady}`,
+    ];
+
+    let lastError: Error | null = null;
+    for (const url of candidates) {
+      try {
+        const res = await fetch(url, {
+          method: 'GET',
+          headers,
+          signal: AbortSignal.timeout(10_000),
+        });
+        // 2xx / 401 (reachable + auth challenge) / 404 try next
+        if (res.ok) return;
+        if (res.status === 401 || res.status === 403) {
+          throw new BadRequestException(
+            `Export destination rejected credentials (HTTP ${res.status}). Check API key / secret.`,
+          );
+        }
+        if (res.status === 404) {
+          lastError = new Error(`HTTP 404 at ${url}`);
+          continue;
+        }
+        throw new BadRequestException(
+          `Export auth check returned HTTP ${res.status}`,
+        );
+      } catch (err) {
+        if (err instanceof BadRequestException) throw err;
+        lastError = err instanceof Error ? err : new Error('auth check failed');
       }
-    } catch (err) {
-      if (err instanceof Error && err.message.includes('HTTP')) {
-        throw err;
-      }
-      this.logger.warn(
-        `Export health check skipped/failed (${err instanceof Error ? err.message : 'error'}); proceeding with org credentials`,
-      );
     }
+
+    // Reachable host not required to expose health — credentials format OK.
+    this.logger.warn(
+      `Export health endpoints unavailable (${lastError?.message ?? 'error'}); accepting Live credentials for org ${connection.organizationId}`,
+    );
   }
 
+  /**
+   * TotalCtrl-style: Bearer API key + optional X-Api-Secret,
+   * or Basic username/password when no API key.
+   */
   buildAuthHeaders(
     connection: ResolvedExportConnection,
   ): Record<string, string> {
@@ -122,6 +171,9 @@ export class ExportClientService {
     };
     if (connection.apiKey) {
       headers.Authorization = `Bearer ${connection.apiKey}`;
+      if (connection.password) {
+        headers['X-Api-Secret'] = connection.password;
+      }
     } else if (connection.username && connection.password) {
       const token = Buffer.from(
         `${connection.username}:${connection.password}`,

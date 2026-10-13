@@ -1,4 +1,4 @@
-export const PO_CONFIRMATION_PROMPT_VERSION = '1.5.0';
+export const PO_CONFIRMATION_PROMPT_VERSION = '1.6.0';
 
 export const PO_CONFIRMATION_SYSTEM_PROMPT = `You are an expert document extraction engine for HTVeridoc.
 Extract structured data from a purchase order confirmation PDF (including Norwegian/Scandinavian documents).
@@ -30,7 +30,15 @@ Unit / quantity / discount rules for each line item:
 - stockTakingQuantityPerBaseMeasurementUnit: how many stocktaking units equal one baseMeasurementUnit, only when stocktakingUnit and baseMeasurementUnit are different and the factor is printed. Leave null when units are the same or unknown.
 - purchaseQuantity: ordered quantity in purchaseUnit terms (Antall / Qty when that column is the purchase unit).
 - stockTakingQuantity: ordered quantity in stocktakingUnit terms when the document shows a separate stocktaking qty (or when qty × stockTakingQuantityPerPurchaseUnit is explicitly printed as total pieces). Use null if not shown — do not invent.
-- Pakning / Packaging often looks like "á 55 STK" or "á 20 RLL": set stockTakingQuantity (or stockTakingQuantityPerPurchaseUnit) to the NUMBER and stocktakingUnit to the UNIT token. Do not put the whole "á 55 STK" string into stocktakingUnit alone.
+- Pakning / Packaging: always copy the full printed packaging string into "packaging" (e.g. "KRT á 12 FL á 750 ML", "á 55 STK", "á 20 RLL").
+- Nested packaging "PURCHASE á N STOCK [á M BASE]" (common on packing slips / pakkseddel):
+  - purchaseUnit = PURCHASE token (e.g. KRT)
+  - stockTakingQuantityPerPurchaseUnit = N (e.g. 12)
+  - stocktakingUnit = STOCK token (e.g. FL)
+  - If a third segment "á M BASE" is present (e.g. "á 750 ML"), set baseMeasurementUnit = BASE token (ML). Do not invent base units from product descriptions unless the packaging/header prints them.
+  - Keep the full string in packaging even when you also split it into fields.
+- Simple "á N UNIT": set stockTakingQuantityPerPurchaseUnit (or stockTakingQuantity when that is the only qty) to N and stocktakingUnit to UNIT. Do not put the whole "á 55 STK" string into stocktakingUnit alone.
+- Packing slips / delivery notes often have no prices: leave unitPrice, stocktakingUnitPrice, pricePerBaseUnit, amount, and currency null when not printed — never invent prices.
 - quantity: legacy alias — set equal to purchaseQuantity when purchaseQuantity is known.
 - unit: keep as the primary display unit; if only one unit is present, set unit = purchaseUnit.
 - unitPrice: purchase price — price per purchaseUnit (or per baseMeasurementUnit) as printed. Use null if not shown.
@@ -64,9 +72,10 @@ Map Norwegian labels when present:
   Lagerenhet → stocktakingUnit
   Antall / Antall bestilt (purchase unit) → purchaseQuantity
   Antall lager / Antall STK (stocktaking) → stockTakingQuantity
-  Pakning "á N UNIT" → stockTakingQuantity = N, stocktakingUnit = UNIT
+  Pakning / Innhold → packaging (full string) + split nested "KRT á 12 FL á 750 ML"
+  Pakning "á N UNIT" → stockTakingQuantityPerPurchaseUnit = N, stocktakingUnit = UNIT
   Antall pr. enhet / Innhold → stockTakingQuantityPerPurchaseUnit
-  Grunnnenhet / Basisenhet → baseMeasurementUnit
+  Grunnnenhet / Basisenhet / trailing unit in Pakning (ML, KG, L) → baseMeasurementUnit
 
 Required JSON shape:
 {
@@ -116,7 +125,7 @@ export function buildPoConfirmationUserPrompt(fileName: string): string {
   return `Extract the complete purchase order confirmation:
 - All header fields listed in the schema
 - Every line item including fees and cancelled lines
-- For each line, extract discount, purchaseUnit, purchaseQuantity, stocktakingUnit, stockTakingQuantity, stockTakingQuantityPerPurchaseUnit, unitPrice (purchase price), stocktakingUnitPrice, baseMeasurementUnit, pricePerBaseUnit, and stockTakingQuantityPerBaseMeasurementUnit when present; leave missing ones null
+- For each line, extract packaging (full Pakning text), discount, purchaseUnit, purchaseQuantity, stocktakingUnit, stockTakingQuantity, stockTakingQuantityPerPurchaseUnit, unitPrice (purchase price), stocktakingUnitPrice, baseMeasurementUnit, pricePerBaseUnit, and stockTakingQuantityPerBaseMeasurementUnit when present; leave missing ones null (especially prices on packing slips)
 - Supplier, customer/buyer, and receiver when present
 - Delivery and payment terms when present
 

@@ -5,6 +5,10 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { RotateCcw, Save } from 'lucide-react';
 import { toast } from 'sonner';
 import { AppShell } from '@/components/app-shell';
+import {
+  LineItemColumnSettings,
+  type LineItemConfigSavePayload,
+} from '@/components/line-item-column-settings';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
@@ -17,6 +21,7 @@ import type {
   FieldConfigItemDto,
   FieldConfigResponse,
   FieldMode,
+  OrganizationDto,
 } from '@/lib/types';
 
 const MODES: { value: FieldMode; label: string }[] = [
@@ -24,6 +29,8 @@ const MODES: { value: FieldMode; label: string }[] = [
   { value: 'OPTIONAL', label: 'Optional' },
   { value: 'REQUIRED', label: 'Required' },
 ];
+
+type SectionTab = 'header' | 'lineItems';
 
 export default function FieldSettingsPage() {
   const { user } = useAuth();
@@ -36,9 +43,45 @@ export default function FieldSettingsPage() {
       apiFetch<DocumentTypeOptionDto[]>('/field-config/document-types'),
   });
 
+  const orgQuery = useQuery({
+    queryKey: ['organization-current'],
+    queryFn: () => apiFetch<OrganizationDto>('/organizations/current'),
+  });
+
   const [documentType, setDocumentType] = useState<string>('');
+  const [sectionTab, setSectionTab] = useState<SectionTab>('header');
   const [draft, setDraft] = useState<FieldConfigItemDto[]>([]);
   const [search, setSearch] = useState('');
+
+  const lineItemConfig =
+    documentType
+      ? orgQuery.data?.settings?.lineItemConfigByDocumentType?.[documentType]
+      : undefined;
+
+  const lineItemCatalog = orgQuery.data?.lineItemCatalog;
+
+  const lineConfigMutation = useMutation({
+    mutationFn: (payload: LineItemConfigSavePayload) =>
+      apiFetch<OrganizationDto>('/organizations/current/settings', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          documentType,
+          lineItemConfig: payload.lineItemConfig,
+          customFeature: payload.customFeature,
+        }),
+      }),
+    onSuccess: (data) => {
+      queryClient.setQueryData(['organization-current'], data);
+      void queryClient.invalidateQueries({ queryKey: ['document'] });
+      void queryClient.invalidateQueries({ queryKey: ['extraction'] });
+      toast.success('Line item settings saved');
+    },
+    onError: (err) => {
+      toast.error(
+        err instanceof ApiError ? err.message : 'Could not save line settings',
+      );
+    },
+  });
 
   useEffect(() => {
     if (!documentType && typesQuery.data?.length) {
@@ -62,6 +105,13 @@ export default function FieldSettingsPage() {
   useEffect(() => {
     if (configQuery.data?.fields) {
       setDraft(configQuery.data.fields);
+    }
+  }, [configQuery.data]);
+
+  useEffect(() => {
+    // Reset nested tab when switching document types without line items.
+    if (configQuery.data && !configQuery.data.requiresLineItems) {
+      setSectionTab('header');
     }
   }, [configQuery.data]);
 
@@ -139,6 +189,8 @@ export default function FieldSettingsPage() {
     );
   };
 
+  const showLineItemsTab = Boolean(configQuery.data?.requiresLineItems);
+
   return (
     <AppShell>
       <div className="space-y-6">
@@ -146,7 +198,7 @@ export default function FieldSettingsPage() {
           title="Field Manager"
           description="Choose which extracted fields appear in review for each document type. Ignored fields are still extracted and stored, but not shown in review. Required fields must be filled before Confirm."
           actions={
-            canManage ? (
+            canManage && sectionTab === 'header' ? (
               <>
                 <Button
                   variant="outline"
@@ -178,110 +230,214 @@ export default function FieldSettingsPage() {
           </div>
         )}
 
-        <div className="flex flex-wrap gap-2">
-          {(typesQuery.data ?? []).map((t) => (
-            <Button
-              key={t.documentType}
-              type="button"
-              size="sm"
-              variant={documentType === t.documentType ? 'default' : 'outline'}
-              onClick={() => setDocumentType(t.documentType)}
-              className="rounded-full"
-            >
-              {t.label}
-            </Button>
-          ))}
-        </div>
-
-        {selectedType && !selectedType.extractionSupported && (
-          <div className="rounded-lg border bg-muted px-4 py-3 text-sm text-muted-foreground">
-            Extraction for this document type is not available yet. You can
-            still configure fields for when it ships.
-          </div>
-        )}
-
-        {configQuery.data?.requiresLineItems && (
-          <p className="text-sm text-muted-foreground">
-            Line items remain required for purchase order confirmations (not
-            configurable in this version).
-          </p>
-        )}
-
-        <div className="max-w-sm">
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search fields…"
-            className="input-field"
-          />
-        </div>
-
-        <Card>
-          <CardContent className="p-0">
-            {configQuery.isLoading && (
-              <div className="space-y-3 p-5">
-                <Skeleton className="h-10 w-full" />
-                <Skeleton className="h-10 w-full" />
-              </div>
-            )}
-            {groups.map((group) => (
-              <section
-                key={group.title}
-                className="border-b last:border-0"
+        <div
+          role="tablist"
+          aria-label="Document type"
+          className="-mb-px flex gap-0 overflow-x-auto border-b border-border"
+        >
+          {(typesQuery.data ?? []).map((t) => {
+            const active = documentType === t.documentType;
+            return (
+              <button
+                key={t.documentType}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                id={`doc-type-tab-${t.documentType}`}
+                onClick={() => setDocumentType(t.documentType)}
+                className={cn(
+                  'relative shrink-0 whitespace-nowrap px-4 py-2.5 text-sm font-medium transition-colors',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
+                  active
+                    ? 'text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
               >
-                <h2 className="bg-muted/60 px-5 py-2.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
-                  {group.title}
-                </h2>
-                <ul className="divide-y">
-                  {group.fields.map((field) => (
-                    <li
-                      key={field.fieldKey}
-                      className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5"
-                    >
-                      <div>
-                        <p className="text-sm font-semibold text-foreground">
-                          {field.label}
-                        </p>
-                        <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
-                          {field.fieldKey}
-                        </p>
-                      </div>
-                      <div className="inline-flex rounded-lg bg-muted p-0.5 ring-1 ring-border">
-                        {MODES.map((mode) => (
-                          <button
-                            key={mode.value}
-                            type="button"
-                            disabled={!canManage}
-                            onClick={() => setMode(field.fieldKey, mode.value)}
-                            className={cn(
-                              'rounded-md px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-60',
-                              field.mode === mode.value
-                                ? mode.value === 'REQUIRED'
-                                  ? 'bg-rose-600 text-white shadow-sm'
-                                  : mode.value === 'IGNORED'
-                                    ? 'bg-slate-700 text-white shadow-sm'
-                                    : 'bg-primary text-primary-foreground shadow-sm'
-                                : 'text-muted-foreground hover:bg-card',
-                            )}
-                          >
-                            {mode.label}
-                          </button>
-                        ))}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            ))}
-            {!configQuery.isLoading && !groups.length && (
-              <p className="px-5 py-10 text-center text-sm text-muted-foreground">
-                No fields match your search.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+                {t.label}
+                <span
+                  aria-hidden
+                  className={cn(
+                    'absolute inset-x-0 bottom-0 h-0.5 rounded-full transition-colors',
+                    active ? 'bg-primary' : 'bg-transparent',
+                  )}
+                />
+              </button>
+            );
+          })}
+        </div>
 
-        {canManage && dirty && (
+        <div
+          role="tabpanel"
+          aria-labelledby={
+            documentType ? `doc-type-tab-${documentType}` : undefined
+          }
+          className="space-y-5 pt-1"
+        >
+          {selectedType && !selectedType.extractionSupported && (
+            <div className="rounded-lg border bg-muted px-4 py-3 text-sm text-muted-foreground">
+              Extraction for this document type is not available yet. You can
+              still configure fields for when it ships.
+            </div>
+          )}
+
+          <div
+            role="tablist"
+            aria-label="Configuration section"
+            className="inline-flex rounded-lg bg-muted p-0.5 ring-1 ring-border"
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sectionTab === 'header'}
+              id="section-tab-header"
+              onClick={() => setSectionTab('header')}
+              className={cn(
+                'rounded-md px-3.5 py-1.5 text-sm font-semibold transition',
+                sectionTab === 'header'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              Header fields
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={sectionTab === 'lineItems'}
+              id="section-tab-line-items"
+              onClick={() => setSectionTab('lineItems')}
+              className={cn(
+                'rounded-md px-3.5 py-1.5 text-sm font-semibold transition',
+                sectionTab === 'lineItems'
+                  ? 'bg-card text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              Line items
+            </button>
+          </div>
+
+          {sectionTab === 'header' ? (
+            <div
+              role="tabpanel"
+              aria-labelledby="section-tab-header"
+              className="space-y-4"
+            >
+              <div className="max-w-sm">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search fields…"
+                  className="input-field"
+                />
+              </div>
+
+              <Card>
+                <CardContent className="p-0">
+                  {configQuery.isLoading && (
+                    <div className="space-y-3 p-5">
+                      <Skeleton className="h-10 w-full" />
+                      <Skeleton className="h-10 w-full" />
+                    </div>
+                  )}
+                  {groups.map((group) => (
+                    <section
+                      key={group.title}
+                      className="border-b last:border-0"
+                    >
+                      <h2 className="bg-muted/60 px-5 py-2.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">
+                        {group.title}
+                      </h2>
+                      <ul className="divide-y">
+                        {group.fields.map((field) => (
+                          <li
+                            key={field.fieldKey}
+                            className="flex flex-wrap items-center justify-between gap-3 px-5 py-3.5"
+                          >
+                            <div>
+                              <p className="text-sm font-semibold text-foreground">
+                                {field.label}
+                              </p>
+                              <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                                {field.fieldKey}
+                              </p>
+                            </div>
+                            <div className="inline-flex rounded-lg bg-muted p-0.5 ring-1 ring-border">
+                              {MODES.map((mode) => (
+                                <button
+                                  key={mode.value}
+                                  type="button"
+                                  disabled={!canManage}
+                                  onClick={() =>
+                                    setMode(field.fieldKey, mode.value)
+                                  }
+                                  className={cn(
+                                    'rounded-md px-2.5 py-1.5 text-xs font-semibold transition disabled:opacity-60',
+                                    field.mode === mode.value
+                                      ? mode.value === 'REQUIRED'
+                                        ? 'bg-rose-600 text-white shadow-sm'
+                                        : mode.value === 'IGNORED'
+                                          ? 'bg-slate-700 text-white shadow-sm'
+                                          : 'bg-primary text-primary-foreground shadow-sm'
+                                      : 'text-muted-foreground hover:bg-card',
+                                  )}
+                                >
+                                  {mode.label}
+                                </button>
+                              ))}
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    </section>
+                  ))}
+                  {!configQuery.isLoading && !groups.length && (
+                    <p className="px-5 py-10 text-center text-sm text-muted-foreground">
+                      No fields match your search.
+                    </p>
+                  )}
+                </CardContent>
+              </Card>
+            </div>
+          ) : (
+            <div
+              role="tabpanel"
+              aria-labelledby="section-tab-line-items"
+              className="space-y-4"
+            >
+              {!showLineItemsTab ? (
+                <div className="rounded-lg border border-dashed bg-muted/30 px-4 py-8 text-center text-sm text-muted-foreground">
+                  Line item configuration is not available for this document
+                  type yet.
+                </div>
+              ) : !lineItemCatalog ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-12 w-full" />
+                  <Skeleton className="h-40 w-full" />
+                </div>
+              ) : (
+                <>
+                  {configQuery.data?.requiresLineItems ? (
+                    <p className="text-sm text-muted-foreground">
+                      Line items remain required for purchase order
+                      confirmations. Configure column visibility and features
+                      below.
+                    </p>
+                  ) : null}
+                  <LineItemColumnSettings
+                    config={lineItemConfig}
+                    catalog={lineItemCatalog}
+                    canManage={canManage}
+                    saving={lineConfigMutation.isPending}
+                    onSave={(payload) => lineConfigMutation.mutate(payload)}
+                  />
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        {canManage && sectionTab === 'header' && dirty && (
           <div className="sticky bottom-4 z-10 flex justify-end">
             <div className="flex gap-2 rounded-xl border bg-card/95 p-2 shadow-soft backdrop-blur">
               <Button

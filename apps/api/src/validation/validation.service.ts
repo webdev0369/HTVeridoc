@@ -9,6 +9,7 @@ import { DocumentStatus, FieldMode } from '../common/enums';
 import { Document } from '../documents/entities/document.entity';
 import { Extraction } from '../extraction/entities/extraction.entity';
 import { FieldConfigService } from '../fields/field-config.service';
+import { HandoffDispatchService } from '../integrations/handoff/handoff-dispatch.service';
 import { ProcessingLogService } from '../processing/processing-log.service';
 import { DocumentValidationError } from './entities/document-validation-error.entity';
 import { ValidationResult } from './entities/validation-result.entity';
@@ -26,6 +27,7 @@ export class ValidationService {
     private readonly extractionsRepo: Repository<Extraction>,
     private readonly processingLog: ProcessingLogService,
     private readonly fieldConfigService: FieldConfigService,
+    private readonly handoff: HandoffDispatchService,
   ) {}
 
   async validateDocument(documentId: string, organizationId: string) {
@@ -122,6 +124,11 @@ export class ValidationService {
     // Rossum-style: still open for human review even when there are errors.
     document.status = DocumentStatus.READY_FOR_REVIEW;
     await this.documentsRepo.save(document);
+    this.handoff.notifyStatus(
+      organizationId,
+      documentId,
+      DocumentStatus.READY_FOR_REVIEW,
+    );
 
     await this.processingLog.log(
       documentId,

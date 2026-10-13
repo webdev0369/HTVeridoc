@@ -111,6 +111,7 @@ export function ExtractionPanel({ extraction }: { extraction: ExtractionDto }) {
                 <th className="px-2 py-2">Stock unit</th>
                 <th className="px-2 py-2">Qty/PU</th>
                 <th className="px-2 py-2">Base unit</th>
+                <th className="px-2 py-2">Content / ST</th>
                 <th className="px-2 py-2">Price</th>
                 <th className="px-2 py-2">Disc.</th>
                 <th className="px-2 py-2">Amount</th>
@@ -147,6 +148,7 @@ export function ExtractionPanel({ extraction }: { extraction: ExtractionDto }) {
                     {line.stockTakingQuantityPerPurchaseUnit ?? '—'}
                   </td>
                   <td className="px-2 py-2">{line.baseMeasurementUnit ?? '—'}</td>
+                  <td className="px-2 py-2">{line.baseContentQuantity ?? '—'}</td>
                   <td className="px-2 py-2">{line.unitPrice ?? '—'}</td>
                   <td className="px-2 py-2">{line.discount ?? '—'}</td>
                   <td className="px-2 py-2">{line.amount ?? '—'}</td>
@@ -154,7 +156,7 @@ export function ExtractionPanel({ extraction }: { extraction: ExtractionDto }) {
               ))}
               {!lineItems.length && (
                 <tr>
-                  <td colSpan={12} className="px-3 py-4 text-slate-400">
+                  <td colSpan={13} className="px-3 py-4 text-slate-400">
                     No line items extracted.
                   </td>
                 </tr>

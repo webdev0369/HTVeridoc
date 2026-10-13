@@ -111,6 +111,19 @@ export class ExtractionLineItem {
   })
   baseMeasurementUnit!: string | null;
 
+  /**
+   * Content of one stocktaking unit expressed in baseMeasurementUnit
+   * (e.g. 750 when base is ML, or 0.75 when prefer-liters converts to L).
+   */
+  @Column({
+    name: 'base_content_quantity',
+    type: 'numeric',
+    precision: 18,
+    scale: 6,
+    nullable: true,
+  })
+  baseContentQuantity!: string | null;
+
   /** Price per base measurement unit when shown on the document. */
   @Column({
     name: 'price_per_base_unit',

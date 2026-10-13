@@ -6,6 +6,7 @@ import {
   ResolvedExportConnection,
   ExportClientService,
 } from './export-client.service';
+import { EXPORT_PATHS } from './export-contract';
 
 export interface SupplierMatchResult {
   externalKey: string;
@@ -96,40 +97,54 @@ export class ExportSupplierService {
     }
 
     if (connection.mode === 'live') {
+      // TotalCtrl addOrGetSupplier accepts UUID or name — no dedicated match API.
+      // Soft-search /suppliers when available; otherwise pass the display name.
       try {
         const remote = await this.exportClient.request<{
           id?: string;
           name?: string;
+          Data?: Array<{ id?: string; name?: string }>;
+          data?: Array<{ id?: string; name?: string }>;
         }>(
           connection,
           'GET',
-          `/suppliers?name=${encodeURIComponent(displayName!)}`,
+          `${EXPORT_PATHS.suppliers}?searchText=${encodeURIComponent(displayName!)}&limit=1&offset=0`,
         );
-        if (remote?.id) {
+        const rows = remote?.Data ?? remote?.data;
+        const first = Array.isArray(rows) ? rows[0] : remote;
+        if (first?.id) {
           await this.upsertMapping({
             organizationId: connection.organizationId,
             externalKey,
-            destinationSupplierId: remote.id,
-            destinationSupplierName: remote.name ?? displayName,
-            matchMethod: 'live_lookup',
+            destinationSupplierId: first.id,
+            destinationSupplierName: first.name ?? displayName,
+            matchMethod: 'live_supplier_search',
           });
           return {
             externalKey,
             displayName,
-            destinationSupplierId: remote.id,
-            matchMethod: 'live_lookup',
+            destinationSupplierId: first.id,
+            matchMethod: 'live_supplier_search',
             matched: true,
           };
         }
       } catch {
-        // Fall through to unmatched — export may still fail later with a clear error.
+        // Soft lookup failed — fall through to name-as-supplierId.
       }
+
+      await this.upsertMapping({
+        organizationId: connection.organizationId,
+        externalKey,
+        destinationSupplierId: displayName!,
+        destinationSupplierName: displayName,
+        matchMethod: 'supplier_name',
+      });
       return {
         externalKey,
         displayName,
-        destinationSupplierId: null,
-        matchMethod: null,
-        matched: false,
+        destinationSupplierId: displayName,
+        matchMethod: 'supplier_name',
+        matched: true,
       };
     }
 
