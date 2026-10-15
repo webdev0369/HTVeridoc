@@ -23,7 +23,8 @@ function toneFor(isUserEdited: boolean, hasError: boolean): HighlightTone {
   return 'ai';
 }
 
-function confidenceTick(confidence: number | null, isUserEdited: boolean) {
+function confidenceTick(_confidence: number | null, isUserEdited: boolean) {
+  // Only user-confirmed fields get a green ✓. AI confidence must not look validated.
   if (isUserEdited) {
     return (
       <span
@@ -34,18 +35,11 @@ function confidenceTick(confidence: number | null, isUserEdited: boolean) {
       </span>
     );
   }
-  if (confidence != null && confidence >= 0.95) {
-    return (
-      <span
-        title={`AI confidence ${Math.round(confidence * 100)}%`}
-        className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-slate-500 text-[10px] text-white"
-      >
-        ✓
-      </span>
-    );
-  }
   return (
-    <span className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-500" />
+    <span
+      title="Not confirmed yet"
+      className="inline-flex h-4 w-4 items-center justify-center rounded-full border border-slate-500"
+    />
   );
 }
 

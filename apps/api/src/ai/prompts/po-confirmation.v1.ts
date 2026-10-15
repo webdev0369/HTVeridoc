@@ -24,20 +24,24 @@ Unit / quantity / discount rules for each line item:
 - discount: percentage or absolute discount if shown (e.g. Rabatt, Discount, %). Prefer numeric percent when clearly a percent; otherwise numeric amount. Use null if none.
 - purchaseUnit: unit the goods are purchased/ordered in (e.g. CS, BOX, PK, STK, KG). Map labels like Enhet, Innkjøpsenhet, Purchase unit, Bestillingsenhet.
 - stocktakingUnit: inventory/stocktaking unit if different from purchase unit (e.g. STK, PCE, EA). Map labels like Lagerenhet, Stocktaking unit, Inventory unit.
-- stockTakingQuantityPerPurchaseUnit: how many stocktaking units are in one purchase unit (e.g. 12 if 1 CS = 12 STK, or the N in Pakning "á N UNIT"). Map labels like Antall pr enhet, Pcs/case, Faktor, Content. If purchaseUnit and stocktakingUnit are the same, set this to 1.
+- stockTakingQuantityPerPurchaseUnit: conversion = stockTakingQuantity ÷ purchaseQuantity when both qtys are known (e.g. 12÷4=3). Also used for nested Pakning "KRT á 12 FL" where 12 is stock units per purchase unit. If purchaseUnit and stocktakingUnit are the same, set this to 1.
 - baseMeasurementUnit: base/measure unit used for pricing or weight/volume (e.g. KG, L, M). Map labels like Grunnnenhet, Basisenhet, Base unit, Measurement unit. Leave null when not clearly printed — never invent.
 - pricePerBaseUnit: price per baseMeasurementUnit when the document shows it separately. Leave null if not shown.
 - stockTakingQuantityPerBaseMeasurementUnit: how many stocktaking units equal one baseMeasurementUnit, only when stocktakingUnit and baseMeasurementUnit are different and the factor is printed. Leave null when units are the same or unknown.
-- purchaseQuantity: ordered quantity in purchaseUnit terms (Antall / Qty when that column is the purchase unit).
-- stockTakingQuantity: ordered quantity in stocktakingUnit terms when the document shows a separate stocktaking qty (or when qty × stockTakingQuantityPerPurchaseUnit is explicitly printed as total pieces). Use null if not shown — do not invent.
-- Pakning / Packaging: always copy the full printed packaging string into "packaging" (e.g. "KRT á 12 FL á 750 ML", "á 55 STK", "á 20 RLL").
+- purchaseQuantity: quantity in purchaseUnit terms. CRITICAL when the PDF has both ordered and delivered columns:
+  - Prefer Levert antall / Delivered qty / Levert (e.g. 3.21 Kg) — NOT Bestilt antall / Ordered qty.
+  - Bestilt antall is ordered-only; do not put it in purchaseQuantity when Levert antall exists on that row.
+  - If Levert antall is blank for a row, leave purchaseQuantity null for that row (do not copy Bestilt).
+  - If only one Antall/Kvt/Qty column exists, use that.
+- stockTakingQuantity: second quantity when printed — for Kvt + Pakning "à N UNIT", N goes here (e.g. Kvt=4, à 12 PK → stockTakingQuantity=12). Do not invent totals from purchase × factor for this simple Pakning shape. When Bestilt+Levert both exist and there is no separate stocktaking qty column, leave stockTakingQuantity null or equal to Levert only if clearly the inventory qty — never fill from Bestilt.
+- Pakning / Packaging: always copy the full printed packaging string into "packaging" (e.g. "KRT á 12 FL á 750 ML", "á 55 STK", "à 12 PK").
 - Nested packaging "PURCHASE á N STOCK [á M BASE]" (common on packing slips / pakkseddel):
   - purchaseUnit = PURCHASE token (e.g. KRT)
-  - stockTakingQuantityPerPurchaseUnit = N (e.g. 12)
+  - stockTakingQuantityPerPurchaseUnit = N (e.g. 12) — conversion factor
   - stocktakingUnit = STOCK token (e.g. FL)
   - If a third segment "á M BASE" is present (e.g. "á 750 ML"), set baseMeasurementUnit = BASE token (ML). Do not invent base units from product descriptions unless the packaging/header prints them.
   - Keep the full string in packaging even when you also split it into fields.
-- Simple "á N UNIT": set stockTakingQuantityPerPurchaseUnit (or stockTakingQuantity when that is the only qty) to N and stocktakingUnit to UNIT. Do not put the whole "á 55 STK" string into stocktakingUnit alone.
+- Simple "á N UNIT" / "à N UNIT" with Kvt/Antall (e.g. Kvt=4, Pakning="à 12 PK"): stockTakingQuantity = N (12), stockTakingQuantityPerPurchaseUnit = N ÷ purchaseQuantity (12÷4=3), stocktakingUnit = UNIT.
 - Packing slips / delivery notes often have no prices: leave unitPrice, stocktakingUnitPrice, pricePerBaseUnit, amount, and currency null when not printed — never invent prices.
 - quantity: legacy alias — set equal to purchaseQuantity when purchaseQuantity is known.
 - unit: keep as the primary display unit; if only one unit is present, set unit = purchaseUnit.
@@ -70,10 +74,15 @@ Map Norwegian labels when present:
   Rabatt → discount
   Innkjøpsenhet / Bestillingsenhet / Enhet → purchaseUnit
   Lagerenhet → stocktakingUnit
-  Antall / Antall bestilt (purchase unit) → purchaseQuantity
+  Levert antall / Delivered qty → purchaseQuantity (PREFERRED when both ordered+delivered exist)
+  Bestilt antall / Ordered qty → ignore for purchaseQuantity when Levert antall is present
+  Antall / Kvt (single qty column) → purchaseQuantity
   Antall lager / Antall STK (stocktaking) → stockTakingQuantity
+  Enhet next to Levert/Bestilt → purchaseUnit (and stocktakingUnit when same)
   Pakning / Innhold → packaging (full string) + split nested "KRT á 12 FL á 750 ML"
-  Pakning "á N UNIT" → stockTakingQuantityPerPurchaseUnit = N, stocktakingUnit = UNIT
+  Pakning "á N UNIT" / "à N UNIT" + Kvt → stockTakingQuantity = N, conversion = N ÷ Kvt, stocktakingUnit = UNIT
+  Example: Kvt=4, Pakning="à 12 PK" → purchaseQuantity=4, stockTakingQuantity=12, stockTakingQuantityPerPurchaseUnit=3
+  Example packing slip: Bestilt=3, Levert=3.21, Enhet=Kg → purchaseQuantity=3.21, purchaseUnit=Kg (not 3)
   Antall pr. enhet / Innhold → stockTakingQuantityPerPurchaseUnit
   Grunnnenhet / Basisenhet / trailing unit in Pakning (ML, KG, L) → baseMeasurementUnit
 

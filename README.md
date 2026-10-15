@@ -12,10 +12,34 @@ Docker is **not** required for local development. For a full stack deploy (API +
 
 ## Prerequisites
 
-- Node.js 20+
-- pnpm 9 (`corepack enable`)
+- Node.js **20+** for this repo (other apps can stay on Node 16)
+- pnpm 9 (ships with nvm’s Node 20 install, or `corepack enable`)
 - PostgreSQL 14+ running locally **or** Docker Desktop / Docker Engine
 - Redis optional for Phases 1–3 (BullMQ is registered but idle; required later for jobs)
+
+### Node 16 + Node 20 side by side (Windows nvm)
+
+On Windows, `nvm use` changes Node **globally** (symlink under `C:\Program Files\nodejs`). That is why it feels like the whole system switches.
+
+For HTVeriDoc you do **not** need to leave Node 20 active:
+
+```bash
+# one-time
+nvm install 20
+
+# keep your default / other projects on 16 if you want:
+nvm use 16
+
+# from THIS repo — start via node (not bare pnpm) when shell is Node 16
+node scripts/dev.js
+# Windows:  dev.cmd
+# Git Bash: bash dev.sh
+```
+
+`pnpm` 9 refuses to start on Node 16, so do **not** type bare `pnpm dev` while your global Node is 16. Use `node scripts/dev.js` / `dev.cmd` instead — it re-execs under nvm’s Node 20 without `nvm use`.
+
+You should see `[dev] shell is v16...; re-exec under ...\v20.x.x`.  
+`.nvmrc` in this repo is `20`. Avoid `nvm use 20` while you are actively running a Node 16 FE elsewhere.
 
 ## Setup
 
@@ -42,11 +66,17 @@ pnpm seed
 ## Run
 
 ```bash
+# Preferred when global Node is 16 (Windows nvm):
+node scripts/dev.js
+# or:  dev.cmd   /   bash dev.sh
+
+# If your shell is already Node 20+, these also work:
 pnpm dev:api   # http://localhost:3001
 pnpm dev:web   # http://localhost:3000
-# or both:
-pnpm dev
+pnpm dev       # runs node scripts/dev.js
 ```
+
+`dev.js` / `with-project-node.js` pin Node 20 for this repo only so Gemini (`@google/genai`) works without flipping global nvm.
 
 ## Deploy with Docker (full system)
 
@@ -69,6 +99,39 @@ pnpm docker:down    # stop stack
 ```
 
 On a VPS: install Docker, copy the repo, set `.env` with your public hostnames/HTTPS URLs, then `docker compose up --build -d`.
+
+## Deploy on Railway
+
+Ship readiness (config + env). Create **four services** (or use Railway Postgres/Redis plugins):
+
+| Service | Source | Notes |
+|---------|--------|--------|
+| Postgres | Railway plugin | Set `DATABASE_URL` on API |
+| Redis | Railway plugin | Set `REDIS_URL` on API (BullMQ; Redis 5+) |
+| API | Dockerfile `apps/api/Dockerfile` or root [`railway.toml`](railway.toml) | Migrations run on boot via `docker/api-entrypoint.sh` |
+| Web | `apps/web` (Next.js) | Build with `NEXT_PUBLIC_API_URL` = public API URL |
+
+**API listen port:** Railway injects `PORT`. The API uses `PORT` when set, otherwise `API_PORT` (default `3001`). Health check: `GET /health`.
+
+**Required API env (production):**
+
+- `DATABASE_URL`, `REDIS_URL`
+- `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` (long random strings)
+- `CORS_ORIGIN` = public web origin (comma-separated if multiple)
+- `PUBLIC_WEB_URL` = same public web origin (editor links in webhooks)
+- `PUBLIC_API_URL` = public API origin (credentials UI)
+- `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`)
+- `INTEGRATIONS_SECRET_KEY` (preferred over falling back to JWT secret)
+- `STORAGE_ROOT` = volume mount path (e.g. `/data/storage`)
+
+**Web env:**
+
+- `NEXT_PUBLIC_API_URL` = public API URL (rebuild after change)
+- `EDITOR_FRAME_ANCESTORS` = comma-separated partner origins allowed to iframe the editor (see `apps/web/next.config.ts`)
+
+**Volume:** Attach a persistent volume to the API service at `STORAGE_ROOT` so PDFs survive restarts.
+
+Example root config for the API service: [`railway.toml`](railway.toml) (`healthcheckPath = /health`).
 
 ## Smoke checklist
 
@@ -97,6 +160,8 @@ On a VPS: install Docker, copy the repo, set `.env` with your public hostnames/H
 | POST | `/documents/:id/process` | Enqueue Gemini extraction (`ai-extraction` queue) |
 | GET | `/documents/:id/extraction` | Latest extraction result |
 | GET | `/ai/requests` | AI token/cost tracking |
+| GET | `/queue/jobs` | List recent BullMQ jobs (`queue.read`) |
+| POST | `/queue/jobs/:queueName/:jobId/retry` | Retry failed job (`queue.manage`) |
 
 ### Phase 4 — Gemini
 
@@ -114,9 +179,14 @@ On a VPS: install Docker, copy the repo, set `.env` with your public hostnames/H
 
 ### Handoff (Approve → webhook)
 
-After parsing and review, **Approve** notifies other systems via webhooks (extraction payload + optional editor link). See `docs/handoff-webhooks-editor.md`.
+After parsing and review, **Approve** notifies other systems via webhooks (extraction payload + optional editor link).
 
-Configure under **Settings → Webhooks**.
+- **In-app (orgs/customers):** Configuration → **API credentials** (org ID, API URL, generate webhook secret) · Guides → **Integration guide**
+- **Partner BE pattern (not FE):** `docs/partner-be-integration.md`
+- **Partner API reference (headers/body/response):** `docs/partner-api-reference.md`
+- **Partner FE/BE tester prompts:** `docs/partner-tester-prompts.md`
+- **Developer detail:** `docs/handoff-webhooks-editor.md`, `docs/customer-integration-guide.md`
+- **Configure:** Settings → Webhooks
 
 Legacy TotalCtrl store-orders export is not part of the product flow (`docs/export-destination-contract.md`).
 

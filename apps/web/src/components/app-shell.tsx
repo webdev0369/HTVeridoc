@@ -4,9 +4,12 @@ import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import {
+  BookOpen,
   Cable,
   FileText,
+  KeyRound,
   LayoutDashboard,
+  ListOrdered,
   LogOut,
   Menu,
   Settings2,
@@ -57,12 +60,16 @@ function NavLinks({
   onNavigate,
   canManageFields,
   canReadIntegrations,
+  canReadDocuments,
+  canReadQueue,
   pathname,
   dark = false,
 }: {
   onNavigate?: () => void;
   canManageFields: boolean;
   canReadIntegrations: boolean;
+  canReadDocuments: boolean;
+  canReadQueue: boolean;
   pathname: string;
   dark?: boolean;
 }) {
@@ -108,7 +115,7 @@ function NavLinks({
         </nav>
       </div>
 
-      {canManageFields || canReadIntegrations ? (
+      {canManageFields || canReadIntegrations || canReadQueue ? (
         <div>
           <p
             className={cn(
@@ -130,15 +137,37 @@ function NavLinks({
               </Link>
             ) : null}
             {canReadIntegrations ? (
+              <>
+                <Link
+                  href="/settings/integrations/credentials"
+                  onClick={onNavigate}
+                  className={linkClass(
+                    pathname.startsWith('/settings/integrations/credentials'),
+                  )}
+                >
+                  <KeyRound className="h-4 w-4" aria-hidden />
+                  API credentials
+                </Link>
+                <Link
+                  href="/settings/integrations/webhooks"
+                  onClick={onNavigate}
+                  className={linkClass(
+                    pathname.startsWith('/settings/integrations/webhooks'),
+                  )}
+                >
+                  <Cable className="h-4 w-4" aria-hidden />
+                  Webhooks
+                </Link>
+              </>
+            ) : null}
+            {canReadQueue ? (
               <Link
-                href="/settings/integrations/webhooks"
+                href="/settings/queue"
                 onClick={onNavigate}
-                className={linkClass(
-                  pathname.startsWith('/settings/integrations/webhooks'),
-                )}
+                className={linkClass(pathname.startsWith('/settings/queue'))}
               >
-                <Cable className="h-4 w-4" aria-hidden />
-                Webhooks
+                <ListOrdered className="h-4 w-4" aria-hidden />
+                Queue
               </Link>
             ) : null}
           </nav>
@@ -172,6 +201,31 @@ function NavLinks({
           })}
         </nav>
       </div>
+
+      {canReadIntegrations || canReadDocuments ? (
+        <div>
+          <p
+            className={cn(
+              'mb-2 px-3 text-[11px] font-semibold uppercase tracking-wider',
+              dark ? 'text-slate-500' : 'text-muted-foreground',
+            )}
+          >
+            Guides
+          </p>
+          <nav className="space-y-0.5">
+            <Link
+              href="/settings/integrations/guide"
+              onClick={onNavigate}
+              className={linkClass(
+                pathname.startsWith('/settings/integrations/guide'),
+              )}
+            >
+              <BookOpen className="h-4 w-4" aria-hidden />
+              Integration guide
+            </Link>
+          </nav>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -181,29 +235,61 @@ export function AppShell({
   layout = 'default',
 }: {
   children: React.ReactNode;
-  layout?: 'default' | 'workspace';
+  layout?: 'default' | 'workspace' | 'embed';
 }) {
-  const { user, loading, logout } = useAuth();
+  const { user, loading, logout, isEmbed } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
   const isWorkspace = layout === 'workspace';
+  const isEmbedLayout = layout === 'embed' || isEmbed;
   const canManageFields = Boolean(user?.permissions?.includes('field.manage'));
   const canReadIntegrations = Boolean(
     user?.permissions?.includes('integration.read') ||
       user?.permissions?.includes('integration.manage'),
   );
+  const canReadDocuments = Boolean(
+    user?.permissions?.includes('document.read'),
+  );
+  const canReadQueue = Boolean(
+    user?.permissions?.includes('queue.read') ||
+      user?.permissions?.includes('queue.manage'),
+  );
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
-    if (!loading && !user) {
+    // Partner iframe sessions must never bounce to the SaaS login screen.
+    if (!loading && !user && !isEmbedLayout) {
       router.replace('/login');
     }
-  }, [loading, user, router]);
+  }, [loading, user, router, isEmbedLayout]);
 
   if (loading || !user) {
+    if (isEmbedLayout && !loading && !user) {
+      return (
+        <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-[#0b0f14] px-6 text-center">
+          <p className="text-lg font-semibold text-slate-100">
+            Session expired
+          </p>
+          <p className="max-w-md text-sm text-slate-400">
+            Close and reopen review from the host app. Your partner application
+            should fetch a fresh editor link before the previous one expires.
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#0b0f14] text-slate-400">
         Loading…
+      </div>
+    );
+  }
+
+  if (isEmbedLayout) {
+    return (
+      <div className="flex h-screen flex-col overflow-hidden bg-[#0b0f14] text-slate-100">
+        <main className="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {children}
+        </main>
       </div>
     );
   }
@@ -293,9 +379,30 @@ export function AppShell({
                     canReadIntegrations
                       ? [
                           {
+                            href: '/settings/integrations/credentials',
+                            label: 'Credentials',
+                            icon: KeyRound,
+                          },
+                          {
+                            href: '/settings/integrations/guide',
+                            label: 'Integration guide',
+                            icon: BookOpen,
+                          },
+                          {
                             href: '/settings/integrations/webhooks',
                             label: 'Webhooks',
                             icon: Cable,
+                          },
+                        ]
+                      : [],
+                  )
+                  .concat(
+                    canReadQueue
+                      ? [
+                          {
+                            href: '/settings/queue',
+                            label: 'Queue',
+                            icon: ListOrdered,
                           },
                         ]
                       : [],
@@ -342,6 +449,8 @@ export function AppShell({
           <NavLinks
             canManageFields={canManageFields}
             canReadIntegrations={canReadIntegrations}
+            canReadDocuments={canReadDocuments}
+            canReadQueue={canReadQueue}
             pathname={pathname}
           />
         </div>
@@ -367,6 +476,8 @@ export function AppShell({
                   <NavLinks
                     canManageFields={canManageFields}
                     canReadIntegrations={canReadIntegrations}
+                    canReadDocuments={canReadDocuments}
+                    canReadQueue={canReadQueue}
                     pathname={pathname}
                     onNavigate={() => setMobileOpen(false)}
                   />

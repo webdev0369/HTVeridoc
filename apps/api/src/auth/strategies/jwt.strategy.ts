@@ -39,6 +39,8 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       organizationId: payload.organizationId,
       role: payload.role ?? RoleCode.REVIEWER,
       permissions: payload.permissions ?? [],
+      documentId:
+        payload.typ === 'editor_link' ? payload.documentId : undefined,
     };
   }
 }

@@ -24,7 +24,10 @@ async function bootstrap() {
     }),
   );
 
-  const port = config.get<number>('API_PORT', 3001);
+  // Railway / cloud injects PORT; local/dev uses API_PORT (default 3001).
+  const port =
+    Number(process.env.PORT) ||
+    config.get<number>('API_PORT', 3001);
   await app.listen(port);
   Logger.log(`HTVeridoc API listening on http://localhost:${port}`, 'Bootstrap');
 }

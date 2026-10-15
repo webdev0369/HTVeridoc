@@ -60,7 +60,10 @@ export const lineItemSchema = z.object({
   description: z.string().nullable().optional(),
   brand: z.string().nullable().optional(),
   quantity: z.number().nullable().optional(),
-  /** Ordered qty in purchaseUnit (preferred over legacy quantity). */
+  /**
+   * Qty in purchaseUnit (preferred over legacy quantity).
+   * When PDF has Bestilt+Levert, use Levert (delivered), not Bestilt (ordered).
+   */
   purchaseQuantity: z.number().nullable().optional(),
   /** Ordered qty in stocktakingUnit when shown separately. */
   stockTakingQuantity: z.number().nullable().optional(),

@@ -285,6 +285,36 @@ export interface WebhookEndpointDto {
   hasSecret: boolean;
   isActive: boolean;
   updatedAt: string | null;
+  /** Present only when a new secret was created on save — show once. */
+  generatedSecret?: string;
+}
+
+/** Org integration bootstrap for partner BE .env / SaaS credentials page. */
+export interface IntegrationCredentialsDto {
+  organizationId: string;
+  organizationName: string;
+  organizationSlug: string | null;
+  apiBaseUrl: string;
+  webOrigin: string;
+  auth: {
+    method: 'jwt';
+    loginPath: '/auth/login';
+    note: string;
+    currentUserEmail: string;
+  };
+  webhook: {
+    configured: boolean;
+    url: string | null;
+    hasSecret: boolean;
+    isActive: boolean;
+    updatedAt: string | null;
+  };
+  partnerEnvTemplate: string;
+}
+
+export interface RotateWebhookSecretDto {
+  secret: string;
+  webhook: WebhookEndpointDto;
 }
 
 export interface EditorLinkDto {
@@ -351,4 +381,27 @@ export interface DocumentExportStatusDto {
   lastError: string | null;
   exportedAt: string | null;
   matchSummary: Record<string, unknown> | null;
+}
+
+export type QueueName = 'ai-extraction' | 'document-export';
+
+export interface QueueJobDto {
+  id: string;
+  name: string;
+  queue: QueueName;
+  documentId: string | null;
+  organizationId: string | null;
+  state: string;
+  failedReason: string | null;
+  attemptsMade: number;
+  timestamp: number | null;
+  processedOn: number | null;
+  finishedOn: number | null;
+}
+
+export interface QueueStatusDto {
+  enabled: boolean;
+  reason?: string;
+  queues: QueueName[];
+  jobs: QueueJobDto[];
 }

@@ -1,13 +1,16 @@
 import { Body, Controller, Delete, Get, Post, Put, UseGuards } from '@nestjs/common';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../../auth/guards/jwt-auth.guard';
 import { PermissionsGuard } from '../../auth/guards/permissions.guard';
 import { OrganizationId } from '../../common/decorators/organization-id.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PermissionCode } from '../../common/enums';
+import { AuthUser } from '../../auth/types/auth-user';
 import {
   CreateEditorLinkDto,
   UpsertWebhookDto,
 } from './dto/upsert-webhook.dto';
+import { CredentialsService } from './credentials.service';
 import { EditorLinkService } from './editor-link.service';
 import { WebhookEndpointService } from './webhook-endpoint.service';
 
@@ -17,7 +20,17 @@ export class HandoffController {
   constructor(
     private readonly webhooks: WebhookEndpointService,
     private readonly editorLinks: EditorLinkService,
+    private readonly credentials: CredentialsService,
   ) {}
+
+  @Get('credentials')
+  @RequirePermissions(PermissionCode.INTEGRATION_READ)
+  getCredentials(
+    @OrganizationId() organizationId: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.credentials.getForOrganization(organizationId, user);
+  }
 
   @Get('webhook')
   @RequirePermissions(PermissionCode.INTEGRATION_READ)
@@ -32,6 +45,12 @@ export class HandoffController {
     @Body() dto: UpsertWebhookDto,
   ) {
     return this.webhooks.upsert(organizationId, dto);
+  }
+
+  @Post('webhook/rotate-secret')
+  @RequirePermissions(PermissionCode.INTEGRATION_MANAGE)
+  rotateWebhookSecret(@OrganizationId() organizationId: string) {
+    return this.webhooks.rotateSecret(organizationId);
   }
 
   @Post('webhook/test')

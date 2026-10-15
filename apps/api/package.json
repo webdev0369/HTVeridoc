@@ -14,7 +14,8 @@
     "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/database/data-source.ts",
     "seed": "ts-node -r tsconfig-paths/register src/database/seed.ts",
     "typeorm": "typeorm-ts-node-commonjs",
-    "test:export": "node --require ts-node/register/transpile-only --test src/integrations/export/export-idempotency.test.ts"
+    "test:export": "node --require ts-node/register/transpile-only --test src/integrations/export/export-idempotency.test.ts",
+    "test:units": "node --require ts-node/register/transpile-only --test src/extraction/line-unit-derivation.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.28.0",

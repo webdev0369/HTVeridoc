@@ -1,10 +1,26 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import { fetchDocumentPdfBlob } from '@/lib/api';
 import type { BoundingBox } from '@/lib/types';
 
 export type HighlightTone = 'ai' | 'edited' | 'error';
+
+/** How to place the float when several PDF tokens match the value. */
+export type HighlightRole =
+  | 'quantity'
+  | 'price'
+  | 'unit'
+  | 'code'
+  | 'text'
+  | 'other';
 
 export interface PdfHighlight {
   page: number;
@@ -17,6 +33,8 @@ export interface PdfHighlight {
    * Prefer matches on the same visual line as these strings (position, item code).
    */
   anchorHints?: string[];
+  /** quantity/price → prefer right-hand columns; never park on item code. */
+  role?: HighlightRole;
 }
 
 export interface PdfTextItem {
@@ -81,6 +99,7 @@ const PACK_UNIT_TOKEN =
 /**
  * Locale-aware number parse for PDF tokens ("75,49" / "1.234,56" / "75.49").
  * Allows "10 PK" / "10PK" (qty + pack unit). Rejects product sizes like "500ml".
+ * Rejects spaced item codes ("8950 07") — those must use text search, not 895007.
  */
 function parseHighlightNumber(s: string | null | undefined): number | null {
   if (s == null) return null;
@@ -98,7 +117,17 @@ function parseHighlightNumber(s: string | null | undefined): number | null {
     return parseHighlightNumber(withUnit[1]);
   }
 
-  const t = original.replace(/\s/g, '');
+  // Item codes like "8950 07" / "8806 50" — not a single quantity.
+  if (/^\d{2,}(?:\s+\d{1,})+$/.test(original)) return null;
+
+  // Thousand-separator spaces only: "1 234" / "12 345" (groups of 3).
+  const t = original.includes(' ')
+    ? /^\d{1,3}(?:\s\d{3})+(?:[.,]\d+)?$/.test(original)
+      ? original.replace(/\s/g, '')
+      : original
+    : original.replace(/\s/g, '');
+  if (t.includes(' ') && / /.test(original)) return null;
+
   // Glued product sizes: 500ml, 750ML, 1l
   if (/^\d+[.,]?\d*[a-zA-ZæøåÆØÅ]+$/u.test(t) && !PACK_UNIT_TOKEN.test(t.replace(/^\d+[.,]?\d*/, ''))) {
     return null;
@@ -188,6 +217,27 @@ function boxCenterY(box: BoundingBox) {
   return box.y + box.height / 2;
 }
 
+/** First text item of a multi-token same-line match for `needle`. */
+function findMultiTokenStart(
+  textItems: PdfTextItem[],
+  needle: string,
+): PdfTextItem | null {
+  if (!needle || textItems.length === 0) return null;
+  for (let i = 0; i < textItems.length; i++) {
+    const window: PdfTextItem[] = [textItems[i]];
+    let joined = normalizeMatch(textItems[i].str);
+    if (joined === needle) return textItems[i];
+    for (let j = i + 1; j < Math.min(i + 8, textItems.length); j++) {
+      if (!sameLine(textItems[i], textItems[j])) break;
+      window.push(textItems[j]);
+      joined = normalizeMatch(window.map((t) => t.str).join(' '));
+      if (joined === needle) return textItems[i];
+      if (joined.length > needle.length + 8) break;
+    }
+  }
+  return null;
+}
+
 /** PDF text item for line position / item code (row identity). */
 function findAnchorItem(
   textItems: PdfTextItem[],
@@ -201,6 +251,42 @@ function findAnchorItem(
     if (!needle || needle.length < 1) continue;
     for (const item of textItems) {
       if (normalizeMatch(item.str) === needle) return item;
+    }
+    // "8950 07" often splits across two PDF glyphs — match the joined row.
+    const multi = findMultiTokenStart(textItems, needle);
+    if (multi) return multi;
+  }
+  return null;
+}
+
+/** Bounding box covering a multi-token hint match (e.g. item code "8950 07"). */
+function findAnchorHintBox(
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): BoundingBox | null {
+  if (!hints?.length || textItems.length === 0) return null;
+  const ordered = [...hints].sort((a, b) => b.length - a.length);
+  for (const hint of ordered) {
+    const needle = normalizeMatch(hint);
+    if (!needle || needle.length < 1) continue;
+    for (let i = 0; i < textItems.length; i++) {
+      const window: PdfTextItem[] = [textItems[i]];
+      let joined = normalizeMatch(textItems[i].str);
+      if (joined === needle) {
+        return {
+          x: textItems[i].x,
+          y: textItems[i].y,
+          width: Math.max(textItems[i].width, 0.08),
+          height: textItems[i].height,
+        };
+      }
+      for (let j = i + 1; j < Math.min(i + 8, textItems.length); j++) {
+        if (!sameLine(textItems[i], textItems[j])) break;
+        window.push(textItems[j]);
+        joined = normalizeMatch(window.map((t) => t.str).join(' '));
+        if (joined === needle) return mergeBoxes(window);
+        if (joined.length > needle.length + 8) break;
+      }
     }
   }
   return null;
@@ -219,6 +305,8 @@ function findAnchorBox(
   textItems: PdfTextItem[],
   hints: string[] | null | undefined,
 ): BoundingBox | null {
+  const fromHint = findAnchorHintBox(textItems, hints);
+  if (fromHint) return fromHint;
   const item = findAnchorItem(textItems, hints);
   if (!item) return null;
   return {
@@ -232,28 +320,108 @@ function findAnchorBox(
 /**
  * When the value is a number, find it on the same visual row as the line
  * anchor — prefer the right-hand qty column ("10 PK"), never the Pos "200".
+ *
+ * Important: do NOT skip hits just because they equal the line position
+ * hint (Line 1 qty "1" used to be skipped → float jumped to item code).
  */
 function findNumericOnAnchorRow(
   textItems: PdfTextItem[],
   valueNum: number,
   hints: string[] | null | undefined,
+  preferRight = true,
 ): BoundingBox | null {
   const anchor = findAnchorItem(textItems, hints);
   if (!anchor) return null;
 
+  // Only skip long identity tokens (article codes), not short position digits.
+  const identityHints = (hints ?? [])
+    .map((h) => normalizeMatch(h))
+    .filter((h) => h.length >= 3);
+
   const onRow = textItems.filter((item) => sameLine(anchor, item));
   const hits: BoundingBox[] = [];
   for (const item of onRow) {
+    // Never treat the article-code glyph itself as the qty/price.
+    if (item.id === anchor.id) continue;
     const n = parseHighlightNumber(item.str);
     if (n == null || !numbersEqual(n, valueNum)) continue;
-    // Skip the anchor tokens themselves (line # / article code).
-    if (hints?.some((h) => normalizeMatch(h) === normalizeMatch(item.str))) {
-      continue;
-    }
+    if (identityHints.some((h) => h === normalizeMatch(item.str))) continue;
     hits.push(numberOnlyBox(item, valueNum));
   }
   if (hits.length === 0) return null;
-  // Qty / pakning columns sit to the right of description.
+  // Qty / price / pakning columns sit to the right of description.
+  hits.sort((a, b) => {
+    const ax = a.x + a.width / 2;
+    const bx = b.x + b.width / 2;
+    if (preferRight && Math.abs(bx - ax) > 0.02) return bx - ax;
+    // Prefer tokens clearly to the right of the item code.
+    const aRight = ax > anchor.x + anchor.width + 0.05 ? 1 : 0;
+    const bRight = bx > anchor.x + anchor.width + 0.05 ? 1 : 0;
+    if (bRight !== aRight) return bRight - aRight;
+    return bx - ax;
+  });
+  return hits[0];
+}
+
+/** Park qty/price float to the right of the row when the printed number isn't found. */
+function qtyFallbackBox(
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): BoundingBox | null {
+  const anchor = findAnchorItem(textItems, hints);
+  if (!anchor) return null;
+  return {
+    x: Math.min(0.78, Math.max(anchor.x + 0.42, 0.55)),
+    y: anchor.y,
+    width: Math.max(anchor.width, 0.05),
+    height: anchor.height,
+  };
+}
+
+/** Short unit tokens (ST, PK, …) — only match on the anchored line. */
+function isShortUnitToken(value: string | null | undefined): boolean {
+  const v = (value ?? '').trim();
+  if (!v || v.length > 4) return false;
+  return /^[A-Za-zæøåÆØÅ.]+$/u.test(v);
+}
+
+/**
+ * Find unit text (ST / PK / …) on the same row as position/item code.
+ * Prefer exact token; also "2,0 ST" → box only the unit part.
+ */
+function findUnitOnAnchorRow(
+  textItems: PdfTextItem[],
+  unit: string,
+  hints: string[] | null | undefined,
+): BoundingBox | null {
+  const anchor = findAnchorItem(textItems, hints);
+  if (!anchor) return null;
+  const needle = normalizeMatch(unit);
+  if (!needle) return null;
+
+  const onRow = textItems.filter((item) => sameLine(anchor, item));
+  const hits: BoundingBox[] = [];
+
+  for (const item of onRow) {
+    const hay = normalizeMatch(item.str);
+    if (hay === needle) {
+      hits.push({
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height,
+      });
+      continue;
+    }
+    // Combined qty+unit glyph: "2,0 ST" / "10PK"
+    if (hay.endsWith(needle) || hay.includes(` ${needle}`)) {
+      const box = substringBox(item, needle);
+      if (box) hits.push(box);
+    }
+  }
+
+  if (hits.length === 0) return null;
+  // Units sit with qty on the right side of the row.
   hits.sort((a, b) => b.x + b.width / 2 - (a.x + a.width / 2));
   return hits[0];
 }
@@ -426,10 +594,17 @@ function findValueBoxes(
     const inBand = scored.filter(
       (s) => Math.abs(boxCenterY(s.box) - preferredY) <= band,
     );
-    // Stay on the anchored row. If the printed value isn't there (derived
-    // qty), return [] so the popup parks on the position/item-code anchor.
-    if (inBand.length === 0) return [];
-    return [rank(inBand)[0].box];
+    // Stay on the anchored row when possible. If the AI bbox/`near` Y is
+    // wrong (e.g. header), do NOT return [] — that parked the float at the
+    // top of the page. Prefer the best text match on the page instead.
+    if (inBand.length > 0) return [rank(inBand)[0].box];
+    const fromAnchor = findAnchorY(textItems, opts?.anchorHints);
+    if (fromAnchor != null) {
+      const anchorBand = scored.filter(
+        (s) => Math.abs(boxCenterY(s.box) - fromAnchor) <= band,
+      );
+      if (anchorBand.length > 0) return [rank(anchorBand)[0].box];
+    }
   }
 
   return [rank(scored)[0].box];
@@ -441,13 +616,27 @@ function resolveHighlightBoxes(
   highlight: PdfHighlight,
 ): BoundingBox[] {
   const valueNum = parseHighlightNumber(highlight.value);
+  const rawValue = (highlight.value ?? '').trim();
+  const role = highlight.role ?? 'other';
+  const preferRight = role === 'quantity' || role === 'price';
 
   // Numeric fields (stocktaking qty, prices, …): find the value on *this*
-  // line's row, preferring the qty column ("10 PK") — not Pos "200".
+  // line's row, preferring the qty column ("10 PK") — not Pos / item code.
   if (valueNum != null && highlight.anchorHints?.length) {
     const onRow = findNumericOnAnchorRow(
       textItems,
       valueNum,
+      highlight.anchorHints,
+      preferRight,
+    );
+    if (onRow) return [onRow];
+  }
+
+  // Short units (ST, PK) appear on every row — lock to the anchored line first.
+  if (isShortUnitToken(rawValue) && highlight.anchorHints?.length) {
+    const onRow = findUnitOnAnchorRow(
+      textItems,
+      rawValue,
       highlight.anchorHints,
     );
     if (onRow) return [onRow];
@@ -457,22 +646,64 @@ function resolveHighlightBoxes(
     near: highlight.boundingBox,
     anchorHints: highlight.anchorHints,
   });
-  if (fromText.length > 0) return fromText;
+  if (fromText.length > 0) {
+    // For qty/price, reject a "match" that is still on the item-code glyph.
+    if (preferRight && highlight.anchorHints?.length) {
+      const anchor = findAnchorItem(textItems, highlight.anchorHints);
+      if (!anchor) return fromText;
+      const box = fromText[0];
+      const cx = box.x + box.width / 2;
+      if (cx > anchor.x + anchor.width + 0.04) return fromText;
+      // Left-side hit (often confused with position) — keep searching.
+    } else {
+      return fromText;
+    }
+  }
 
   if (valueNum != null && highlight.anchorHints?.length) {
     const onRow = findNumericOnAnchorRow(
       textItems,
       valueNum,
       highlight.anchorHints,
+      preferRight,
     );
     if (onRow) return [onRow];
+  }
+
+  // Qty/price: never park the float on the item code — sit in the qty band.
+  if (preferRight && highlight.anchorHints?.length) {
+    const fallback = qtyFallbackBox(textItems, highlight.anchorHints);
+    if (fallback) return [fallback];
   }
 
   // Last resort: park on article/position so we stay on the correct row.
   const anchor = findAnchorBox(textItems, highlight.anchorHints);
   if (anchor) return [anchor];
-  if (highlight.boundingBox) return [highlight.boundingBox];
+  if (highlight.boundingBox) {
+    return [highlight.boundingBox];
+  }
   return [];
+}
+
+/** Keep the edit popup glued to the highlight box (flip above when near bottom). */
+function popupPositionStyle(box: BoundingBox): CSSProperties {
+  const boxTop = box.y * 100;
+  const boxBottom = (box.y + box.height) * 100;
+  const boxCenterX = (box.x + box.width / 2) * 100;
+  // Approx popup size as % of a typical page (~700–900px wide, tall doc).
+  const popupW = 28;
+  const popupH = 16;
+
+  const placeAbove = boxBottom > 70;
+  const top = placeAbove
+    ? Math.max(1, boxTop - popupH - 0.6)
+    : Math.min(boxBottom + 0.6, 100 - popupH);
+
+  // Center on the highlight. Shifting right-column floats left made qty
+  // editors look like they were parked on the item code.
+  const left = Math.min(Math.max(boxCenterX - popupW / 2, 1), 100 - popupW);
+
+  return { left: `${left}%`, top: `${top}%` };
 }
 
 export function PdfViewer({
@@ -1042,13 +1273,7 @@ function HighlightPopup({
       className="absolute z-30 w-[240px] rounded-xl bg-[#1a2230] p-2.5 text-white shadow-2xl ring-1 ring-[#3b82f6]/50"
       style={
         primaryBox
-          ? {
-              left: `${Math.min(Math.max(primaryBox.x * 100, 0), 72)}%`,
-              top: `${Math.min(
-                primaryBox.y * 100 + primaryBox.height * 100 + 0.8,
-                92,
-              )}%`,
-            }
+          ? popupPositionStyle(primaryBox)
           : { left: '12px', top: '12px' }
       }
       onMouseDown={(e) => e.stopPropagation()}

@@ -107,38 +107,53 @@ function numToInput(value: number | null | undefined) {
   return value == null ? '' : String(value);
 }
 
-function cellHasValue(value: string | number | null | undefined): boolean {
-  if (value == null) return false;
-  if (typeof value === 'number') return Number.isFinite(value);
-  return value.trim() !== '';
+/**
+ * Green ✓ only after the user confirmed this cell (PDF ✓ or table edit).
+ * AI confidence must never look "validated" — that made every column look OK.
+ */
+function CellTick({ confirmed }: { confirmed: boolean }) {
+  if (!confirmed) return null;
+  return (
+    <span
+      title="Confirmed"
+      className="ml-1 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[9px] text-white"
+    >
+      ✓
+    </span>
+  );
 }
 
-/** Tick only when the cell has a value (or was edited with a value). Empty cells never look "confirmed". */
-function CellTick({
-  confidence,
-  edited,
-  hasValue,
-}: {
-  confidence: number | null;
-  edited: boolean;
-  hasValue: boolean;
-}) {
-  if (!hasValue) return null;
-  if (edited) {
-    return (
-      <span className="ml-1 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-emerald-500 text-[9px] text-white">
-        ✓
-      </span>
-    );
+/** Map a line patch onto review columns that were just saved. */
+function columnsFromPatch(
+  patch: Partial<ExtractionLineItemDto>,
+): LineReviewColumn[] {
+  const cols: LineReviewColumn[] = [];
+  if ('articleNumber' in patch) cols.push('articleNumber');
+  if ('description' in patch) cols.push('description');
+  if ('purchaseUnit' in patch || 'unit' in patch) cols.push('purchaseUnit');
+  if ('purchaseQuantity' in patch || 'quantity' in patch) {
+    cols.push('purchaseQuantity');
   }
-  if (confidence != null && confidence >= 0.9) {
-    return (
-      <span className="ml-1 inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full bg-slate-500 text-[9px] text-white">
-        ✓
-      </span>
-    );
+  if ('unitPrice' in patch) cols.push('unitPrice');
+  if ('stocktakingUnit' in patch) cols.push('stocktakingUnit');
+  if ('stockTakingQuantity' in patch) cols.push('stockTakingQuantity');
+  if ('stocktakingUnitPrice' in patch) cols.push('stocktakingUnitPrice');
+  if ('stockTakingQuantityPerPurchaseUnit' in patch) {
+    cols.push('stockTakingQuantityPerPurchaseUnit');
   }
-  return null;
+  if ('baseMeasurementUnit' in patch) cols.push('baseMeasurementUnit');
+  if ('baseContentQuantity' in patch) cols.push('baseContentQuantity');
+  if ('pricePerBaseUnit' in patch) cols.push('pricePerBaseUnit');
+  if ('stockTakingQuantityPerBaseMeasurementUnit' in patch) {
+    cols.push('stockTakingQuantityPerBaseMeasurementUnit');
+  }
+  if ('discount' in patch) cols.push('discount');
+  if ('amount' in patch) cols.push('amount');
+  return cols;
+}
+
+function cellConfirmKey(lineId: string, column: LineReviewColumn) {
+  return `${lineId}:${column}`;
 }
 
 interface LineItemsTableProps {
@@ -157,6 +172,12 @@ interface LineItemsTableProps {
   onStartMapColumn?: (column: LineReviewColumn) => void;
   onCancelMapColumn?: () => void;
   saving?: boolean;
+  /** Fired when PDF popup confirms a line cell (so the table can show ✓). */
+  confirmSignal?: {
+    lineId: string;
+    column: LineReviewColumn;
+    at: number;
+  } | null;
 }
 
 export function LineItemsTable({
@@ -172,8 +193,41 @@ export function LineItemsTable({
   onStartMapColumn,
   onCancelMapColumn,
   saving,
+  confirmSignal = null,
 }: LineItemsTableProps) {
   const [mapMenuOpen, setMapMenuOpen] = useState(false);
+  /** Per-cell confirms — never use line-level AI confidence / isUserEdited. */
+  const [confirmedCells, setConfirmedCells] = useState<Set<string>>(
+    () => new Set(),
+  );
+
+  const markColumnsConfirmed = useCallback(
+    (lineId: string, columns: LineReviewColumn[]) => {
+      if (!columns.length) return;
+      setConfirmedCells((prev) => {
+        const next = new Set(prev);
+        for (const col of columns) {
+          next.add(cellConfirmKey(lineId, col));
+        }
+        return next;
+      });
+    },
+    [],
+  );
+
+  // PDF popup ✓ / pick — parent passes the exact cell that was confirmed.
+  useEffect(() => {
+    if (!confirmSignal) return;
+    markColumnsConfirmed(confirmSignal.lineId, [confirmSignal.column]);
+  }, [confirmSignal, markColumnsConfirmed]);
+
+  const saveLineAndMark = useCallback(
+    async (lineItemId: string, patch: Partial<ExtractionLineItemDto>) => {
+      await onSaveLine(lineItemId, patch);
+      markColumnsConfirmed(lineItemId, columnsFromPatch(patch));
+    },
+    [onSaveLine, markColumnsConfirmed],
+  );
   const showBaseCols = useMemo(
     () => linesHaveBaseMeasurementUnit(lineItems),
     [lineItems],
@@ -454,6 +508,7 @@ export function LineItemsTable({
                     ? selection.column
                     : null
                 }
+                confirmedCells={confirmedCells}
                 showBaseCols={showBaseCols}
                 showBaseContentCol={showBaseContentCol}
                 showStPerBaseCol={showStPerBaseCol}
@@ -471,12 +526,14 @@ export function LineItemsTable({
                     anchorHints: lineAnchorHints(line),
                     tone: issueByLine.has(line.id)
                       ? 'error'
-                      : line.isUserEdited
+                      : confirmedCells.has(
+                            cellConfirmKey(line.id, column),
+                          )
                         ? 'edited'
                         : 'ai',
                   })
                 }
-                onSave={(patch) => onSaveLine(line.id, patch)}
+                onSave={(patch) => saveLineAndMark(line.id, patch)}
                 onDelete={
                   showActions
                     ? () =>
@@ -590,6 +647,7 @@ function LineRow({
   editable,
   selected,
   selectedColumn,
+  confirmedCells,
   showBaseCols,
   showBaseContentCol,
   showStPerBaseCol,
@@ -603,6 +661,7 @@ function LineRow({
   editable: boolean;
   selected: boolean;
   selectedColumn: LineReviewColumn | null;
+  confirmedCells: Set<string>;
   showBaseCols: boolean;
   showBaseContentCol: boolean;
   showStPerBaseCol: boolean;
@@ -612,6 +671,8 @@ function LineRow({
   onSave: (patch: Partial<ExtractionLineItemDto>) => Promise<void>;
   onDelete?: () => void;
 }) {
+  const isConfirmed = (column: LineReviewColumn) =>
+    confirmedCells.has(cellConfirmKey(line.id, column));
   const [articleNumber, setArticleNumber] = useState(line.articleNumber ?? '');
   const [description, setDescription] = useState(line.description ?? '');
   const [purchaseUnit, setPurchaseUnit] = useState(
@@ -844,11 +905,7 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center">
           {cellInput('articleNumber', articleNumber, setArticleNumber)}
-          <CellTick
-            confidence={line.confidence}
-            edited={line.isUserEdited}
-            hasValue={cellHasValue(articleNumber)}
-          />
+          <CellTick confirmed={isConfirmed('articleNumber')} />
         </div>
       </td>
       <td
@@ -857,18 +914,17 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center">
           {cellInput('description', description, setDescription)}
-          <CellTick
-            confidence={line.confidence}
-            edited={line.isUserEdited}
-            hasValue={cellHasValue(description)}
-          />
+          <CellTick confirmed={isConfirmed('description')} />
         </div>
       </td>
       <td
         className="overflow-hidden border-b border-white/5 px-3 py-2"
         onClick={(e) => e.stopPropagation()}
       >
-        {cellInput('purchaseUnit', purchaseUnit, setPurchaseUnit)}
+        <div className="flex min-w-0 items-center">
+          {cellInput('purchaseUnit', purchaseUnit, setPurchaseUnit)}
+          <CellTick confirmed={isConfirmed('purchaseUnit')} />
+        </div>
       </td>
       <td
         className="overflow-hidden border-b border-white/5 px-3 py-2"
@@ -876,11 +932,7 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center justify-end">
           {cellInput('purchaseQuantity', purchaseQty, setPurchaseQty, 'right')}
-          <CellTick
-            confidence={line.confidence}
-            edited={line.isUserEdited}
-            hasValue={cellHasValue(purchaseQty)}
-          />
+          <CellTick confirmed={isConfirmed('purchaseQuantity')} />
         </div>
       </td>
       <td
@@ -889,11 +941,7 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center justify-end">
           {cellInput('unitPrice', purchasePrice, setPurchasePrice, 'right')}
-          <CellTick
-            confidence={line.confidence}
-            edited={line.isUserEdited}
-            hasValue={cellHasValue(purchasePrice)}
-          />
+          <CellTick confirmed={isConfirmed('unitPrice')} />
         </div>
       </td>
       <td
@@ -1006,11 +1054,7 @@ function LineRow({
       >
         <div className="flex min-w-0 items-center justify-end">
           {cellInput('amount', amount, setAmount, 'right')}
-          <CellTick
-            confidence={line.confidence}
-            edited={line.isUserEdited}
-            hasValue={cellHasValue(amount)}
-          />
+          <CellTick confirmed={isConfirmed('amount')} />
         </div>
       </td>
       <td className="overflow-hidden border-b border-white/5 px-3 py-2">

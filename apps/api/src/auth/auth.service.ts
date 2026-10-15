@@ -228,6 +228,19 @@ export class AuthService {
   }
 
   async me(user: AuthUser) {
+    // Handoff editor JWTs use synthetic user ids (editor:<documentId>).
+    if (user.userId.startsWith('editor:')) {
+      return {
+        id: user.userId,
+        email: user.email,
+        name: user.name,
+        organizationId: user.organizationId,
+        role: user.role,
+        permissions: user.permissions,
+        organizations: [],
+      };
+    }
+
     const memberships = await this.membershipsRepo.find({
       where: { userId: user.userId },
       relations: ['organization', 'role'],

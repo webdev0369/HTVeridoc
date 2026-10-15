@@ -1,5 +1,5 @@
 import type { BoundingBox, ExtractionLineItemDto } from '@/lib/types';
-import type { HighlightTone } from '@/components/pdf-viewer';
+import type { HighlightRole, HighlightTone } from '@/components/pdf-viewer';
 import { parseLocaleNumber } from '@/lib/parse-locale-number';
 
 /** Editable line-item columns, left → right (review / confirm order). */
@@ -166,6 +166,34 @@ export function lineSelectionLabel(
 ): string {
   const pos = line.position ?? line.sortOrder + 1;
   return `Line ${pos} · ${LINE_REVIEW_COLUMN_LABELS[column]}`;
+}
+
+/** PDF float placement role for a line column. */
+export function highlightRoleForColumn(column: LineReviewColumn): HighlightRole {
+  switch (column) {
+    case 'purchaseQuantity':
+    case 'stockTakingQuantity':
+    case 'stockTakingQuantityPerPurchaseUnit':
+    case 'baseContentQuantity':
+    case 'stockTakingQuantityPerBaseMeasurementUnit':
+      return 'quantity';
+    case 'unitPrice':
+    case 'stocktakingUnitPrice':
+    case 'pricePerBaseUnit':
+    case 'discount':
+    case 'amount':
+      return 'price';
+    case 'purchaseUnit':
+    case 'stocktakingUnit':
+    case 'baseMeasurementUnit':
+      return 'unit';
+    case 'articleNumber':
+      return 'code';
+    case 'description':
+      return 'text';
+    default:
+      return 'other';
+  }
 }
 
 const BASE_ONLY_COLUMNS: LineReviewColumn[] = [

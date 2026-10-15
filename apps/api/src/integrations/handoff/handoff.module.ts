@@ -5,6 +5,8 @@ import { Document } from '../../documents/entities/document.entity';
 import { Extraction } from '../../extraction/entities/extraction.entity';
 import { ExtractionField } from '../../extraction/entities/extraction-field.entity';
 import { ExtractionLineItem } from '../../extraction/entities/extraction-line-item.entity';
+import { Organization } from '../../organizations/entities/organization.entity';
+import { CredentialsService } from './credentials.service';
 import { EditorLinkService } from './editor-link.service';
 import { HandoffController } from './handoff.controller';
 import { HandoffDispatchService } from './handoff-dispatch.service';
@@ -17,6 +19,7 @@ import { WebhookEndpointService } from './webhook-endpoint.service';
     AuthModule,
     TypeOrmModule.forFeature([
       WebhookEndpoint,
+      Organization,
       Document,
       Extraction,
       ExtractionField,
@@ -28,11 +31,13 @@ import { WebhookEndpointService } from './webhook-endpoint.service';
     WebhookEndpointService,
     EditorLinkService,
     HandoffDispatchService,
+    CredentialsService,
   ],
   exports: [
     WebhookEndpointService,
     EditorLinkService,
     HandoffDispatchService,
+    CredentialsService,
   ],
 })
 export class HandoffModule {}

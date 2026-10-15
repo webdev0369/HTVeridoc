@@ -3,7 +3,16 @@
 import Link from 'next/link';
 import { useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowRight, FileUp, Settings2, Users } from 'lucide-react';
+import {
+  ArrowRight,
+  BookOpen,
+  Cable,
+  FileUp,
+  KeyRound,
+  ListOrdered,
+  Settings2,
+  Users,
+} from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
@@ -33,6 +42,14 @@ import type { DocumentListResponse } from '@/lib/types';
 export default function DashboardPage() {
   const { user } = useAuth();
   const canManageFields = Boolean(user?.permissions?.includes('field.manage'));
+  const canReadIntegrations = Boolean(
+    user?.permissions?.includes('integration.read') ||
+      user?.permissions?.includes('integration.manage'),
+  );
+  const canReadQueue = Boolean(
+    user?.permissions?.includes('queue.read') ||
+      user?.permissions?.includes('queue.manage'),
+  );
 
   const { data, isLoading } = useQuery({
     queryKey: ['documents'],
@@ -220,6 +237,76 @@ export default function DashboardPage() {
                     <CardTitle className="text-base">Field Manager</CardTitle>
                     <CardDescription>
                       Control required, optional, and ignored review fields.
+                    </CardDescription>
+                  </CardHeader>
+                </Card>
+              </Link>
+            ) : null}
+            {canReadIntegrations ? (
+              <>
+                <Link href="/settings/integrations/credentials" className="block">
+                  <Card className="transition hover:border-primary/40">
+                    <CardHeader>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
+                        <KeyRound className="h-4 w-4" aria-hidden />
+                      </div>
+                      <CardDescription className="pt-2">
+                        Configuration
+                      </CardDescription>
+                      <CardTitle className="text-base">Credentials</CardTitle>
+                      <CardDescription>
+                        API URL, org ID, and webhook signing secret for partners.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                </Link>
+                <Link href="/settings/integrations/webhooks" className="block">
+                  <Card className="transition hover:border-primary/40">
+                    <CardHeader>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
+                        <Cable className="h-4 w-4" aria-hidden />
+                      </div>
+                      <CardDescription className="pt-2">
+                        Configuration
+                      </CardDescription>
+                      <CardTitle className="text-base">Webhooks</CardTitle>
+                      <CardDescription>
+                        Notify partner systems after Approve (status + extraction).
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                </Link>
+                <Link href="/settings/integrations/guide" className="block">
+                  <Card className="transition hover:border-primary/40">
+                    <CardHeader>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
+                        <BookOpen className="h-4 w-4" aria-hidden />
+                      </div>
+                      <CardDescription className="pt-2">Guides</CardDescription>
+                      <CardTitle className="text-base">
+                        Integration guide
+                      </CardTitle>
+                      <CardDescription>
+                        Partner BE/FE flow, webhooks, and API reference.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                </Link>
+              </>
+            ) : null}
+            {canReadQueue ? (
+              <Link href="/settings/queue" className="block">
+                <Card className="transition hover:border-primary/40">
+                  <CardHeader>
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
+                      <ListOrdered className="h-4 w-4" aria-hidden />
+                    </div>
+                    <CardDescription className="pt-2">
+                      Administration
+                    </CardDescription>
+                    <CardTitle className="text-base">Queue</CardTitle>
+                    <CardDescription>
+                      Inspect and retry failed extraction jobs.
                     </CardDescription>
                   </CardHeader>
                 </Card>

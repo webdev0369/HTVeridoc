@@ -1,3 +1,5 @@
+import { isEditorLinkToken } from './editor-session';
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 export class ApiError extends Error {
@@ -49,7 +51,13 @@ export async function apiFetch<T>(
     headers,
   });
 
-  if (res.status === 401 && retry && tokens?.refreshToken) {
+  // Editor-link JWTs are not refresh tokens — do not wipe the embed session.
+  if (
+    res.status === 401 &&
+    retry &&
+    tokens?.refreshToken &&
+    !isEditorLinkToken(tokens.accessToken)
+  ) {
     const refreshed = await fetch(`${API_URL}/auth/refresh`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

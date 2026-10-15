@@ -14,7 +14,6 @@ import {
   type PdfHighlight,
 } from '@/components/pdf-viewer';
 import { LineItemsTable } from '@/components/line-items-table';
-import { ExportStatusBanner } from '@/components/export-status-banner';
 import { ReviewActions } from '@/components/review-actions';
 import {
   ProcessingSidebar,
@@ -23,11 +22,12 @@ import {
 import { StatusBadge } from '@/components/status-badge';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
+import { isEmbedSession } from '@/lib/editor-session';
 import {
   assignColumnValuesToLines,
   collectColumnBandValues,
   columnMapLabel,
-  isNumericLineColumn,
+  columnMapParseMode,
   type ColumnMapAssignment,
 } from '@/lib/column-map';
 import {
@@ -36,13 +36,13 @@ import {
 } from '@/lib/review-queue';
 import {
   getLineColumnValue,
+  highlightRoleForColumn,
   lineColumnToPatch,
   type LineReviewColumn,
   type ReviewSelection,
 } from '@/lib/review-types';
 import type {
   DocumentDto,
-  DocumentExportStatusDto,
   EditorLinkDto,
   ExtractionDto,
   ExtractionLineItemDto,
@@ -91,10 +91,18 @@ export default function DocumentDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { user, isEmbed } = useAuth();
+  const embedMode = isEmbed || isEmbedSession(id);
+  const shellLayout = embedMode ? 'embed' : 'workspace';
 
   const [selection, setSelection] = useState<ReviewSelection>(null);
   const [mapColumn, setMapColumn] = useState<LineReviewColumn | null>(null);
+  /** Signals LineItemsTable which line cell was just confirmed via PDF ✓. */
+  const [lineConfirmSignal, setLineConfirmSignal] = useState<{
+    lineId: string;
+    column: LineReviewColumn;
+    at: number;
+  } | null>(null);
   const [mapPreview, setMapPreview] = useState<{
     column: LineReviewColumn;
     page: number;
@@ -205,17 +213,6 @@ export default function DocumentDetailPage() {
     enabled: Boolean(data?.documentType),
   });
 
-  const exportStatusQuery = useQuery({
-    queryKey: ['export-status', id],
-    queryFn: () =>
-      apiFetch<DocumentExportStatusDto>(`/documents/${id}/export`),
-    enabled:
-      Boolean(id) &&
-      Boolean(data) &&
-      ['EXPORTING', 'EXPORTED', 'EXPORT_FAILED'].includes(data?.status ?? ''),
-    refetchInterval: () => (data?.status === 'EXPORTING' ? 1200 : false),
-  });
-
   const revalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
     null,
   );
@@ -231,7 +228,6 @@ export default function DocumentDetailPage() {
     queryClient.invalidateQueries({ queryKey: ['extraction', id] });
     queryClient.invalidateQueries({ queryKey: ['validation', id] });
     queryClient.invalidateQueries({ queryKey: ['events', id] });
-    queryClient.invalidateQueries({ queryKey: ['export-status', id] });
     queryClient.invalidateQueries({ queryKey: ['documents'] });
   };
 
@@ -314,18 +310,6 @@ export default function DocumentDetailPage() {
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : 'Approve failed');
-    },
-  });
-
-  const retryExportMutation = useMutation({
-    mutationFn: () =>
-      apiFetch(`/documents/${id}/export/retry`, { method: 'POST' }),
-    onSuccess: () => {
-      invalidateDoc();
-      toast.success('Export retry started');
-    },
-    onError: (err) => {
-      toast.error(err instanceof ApiError ? err.message : 'Retry failed');
     },
   });
 
@@ -629,6 +613,10 @@ export default function DocumentDetailPage() {
       value: selection.value,
       anchorHints:
         selection.type === 'line' ? selection.anchorHints : undefined,
+      role:
+        selection.type === 'line'
+          ? highlightRoleForColumn(selection.column)
+          : undefined,
     };
   }, [selection, pdfPage]);
 
@@ -651,13 +639,14 @@ export default function DocumentDetailPage() {
 
   const handleColumnMapSeedPick = (pick: ColumnMapSeedPick) => {
     if (!mapColumn || !extractionQuery.data) return;
-    const numeric = isNumericLineColumn(mapColumn);
-    const band = collectColumnBandValues(pick.pageItems, pick.seed, numeric);
+    const mode = columnMapParseMode(mapColumn);
+    const band = collectColumnBandValues(pick.pageItems, pick.seed, mode);
     const assignments = assignColumnValuesToLines(
       extractionQuery.data.lineItems ?? [],
       pick.page,
       band,
       (line) => getLineColumnValue(line, mapColumn),
+      pick.pageItems,
     );
     setMapPreview({
       column: mapColumn,
@@ -669,12 +658,35 @@ export default function DocumentDetailPage() {
   const handleApplyColumnMap = async () => {
     if (!mapPreview) return;
     const values = mapPreview.assignments
-      .filter((a) => a.next != null && a.next !== '')
-      .map((a) => ({ lineItemId: a.lineItemId, value: a.next }));
+      .map((a) => ({
+        lineItemId: a.lineItemId,
+        value: a.next?.trim() || null,
+      }))
+      .filter(
+        (a): a is { lineItemId: string; value: string } =>
+          a.value != null && a.value !== '',
+      );
     if (!values.length) return;
     await bulkColumnMutation.mutateAsync({
       column: mapPreview.column,
       values,
+    });
+  };
+
+  const handleMapPreviewValueChange = (
+    lineItemId: string,
+    nextValue: string,
+  ) => {
+    setMapPreview((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        assignments: prev.assignments.map((row) =>
+          row.lineItemId === lineItemId
+            ? { ...row, next: nextValue }
+            : row,
+        ),
+      };
     });
   };
 
@@ -702,6 +714,11 @@ export default function DocumentDetailPage() {
       await saveLineMutation.mutateAsync({
         lineItemId: selection.id,
         patch,
+      });
+      setLineConfirmSignal({
+        lineId: selection.id,
+        column: selection.column,
+        at: Date.now(),
       });
       setSelection({
         ...selection,
@@ -732,6 +749,11 @@ export default function DocumentDetailPage() {
       await saveLineMutation.mutateAsync({
         lineItemId: current.id,
         patch: lineColumnToPatch(current.column, next),
+      });
+      setLineConfirmSignal({
+        lineId: current.id,
+        column: current.column,
+        at: Date.now(),
       });
     }
 
@@ -819,7 +841,7 @@ export default function DocumentDetailPage() {
 
   if (isLoading) {
     return (
-      <AppShell layout="workspace">
+      <AppShell layout={shellLayout}>
         <div className="flex flex-1 items-center justify-center text-slate-400">
           Loading document…
         </div>
@@ -829,7 +851,7 @@ export default function DocumentDetailPage() {
 
   if (error || !data) {
     return (
-      <AppShell layout="workspace">
+      <AppShell layout={shellLayout}>
         <div className="flex flex-1 items-center justify-center text-rose-300">
           Failed to load document.
         </div>
@@ -879,15 +901,19 @@ export default function DocumentDetailPage() {
   );
 
   return (
-    <AppShell layout="workspace">
+    <AppShell layout={shellLayout}>
       <div className="flex shrink-0 items-center gap-3 border-b border-white/10 bg-[#121826] px-4 py-2">
-        <Link
-          href="/documents"
-          className="shrink-0 text-sm font-medium text-slate-400 hover:text-white"
-        >
-          ← Documents
-        </Link>
-        <div className="h-4 w-px bg-white/10" />
+        {!embedMode && (
+          <>
+            <Link
+              href="/documents"
+              className="shrink-0 text-sm font-medium text-slate-400 hover:text-white"
+            >
+              ← Documents
+            </Link>
+            <div className="h-4 w-px bg-white/10" />
+          </>
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="truncate text-sm font-semibold text-white">
@@ -897,17 +923,19 @@ export default function DocumentDetailPage() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            disabled={editorLinkMutation.isPending}
-            onClick={() => editorLinkMutation.mutate()}
-            className="text-slate-300 hover:bg-white/5 hover:text-white"
-            title="Copy secure link for other systems to open this review"
-          >
-            {editorLinkMutation.isPending ? 'Link…' : 'Copy editor link'}
-          </Button>
+          {!embedMode && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={editorLinkMutation.isPending}
+              onClick={() => editorLinkMutation.mutate()}
+              className="text-slate-300 hover:bg-white/5 hover:text-white"
+              title="Copy secure link for other systems to open this review"
+            >
+              {editorLinkMutation.isPending ? 'Link…' : 'Copy editor link'}
+            </Button>
+          )}
           {canRevalidate && (
             <Button
               type="button"
@@ -920,7 +948,7 @@ export default function DocumentDetailPage() {
               {revalidateMutation.isPending ? 'Validating…' : 'Re-validate'}
             </Button>
           )}
-          {canProcess && (
+          {!embedMode && canProcess && (
             <Button
               type="button"
               variant="ghost"
@@ -946,16 +974,6 @@ export default function DocumentDetailPage() {
             : 'Something went wrong'}
         </div>
       )}
-
-      <ExportStatusBanner
-        status={exportStatusQuery.data}
-        canRetry={
-          data.status === 'EXPORT_FAILED' &&
-          hasPerm(user?.permissions, 'document.approve')
-        }
-        retrying={retryExportMutation.isPending}
-        onRetry={() => retryExportMutation.mutate()}
-      />
 
       {/* Rossum layout: fields left | PDF top-right + line table bottom-right */}
       <div className="grid min-h-0 min-w-0 flex-1 grid-cols-1 lg:grid-cols-[360px_minmax(0,1fr)]">
@@ -1008,7 +1026,13 @@ export default function DocumentDetailPage() {
             columnMapMode={Boolean(mapColumn && canEdit)}
             columnMapHint={
               mapColumn
-                ? `Map column: click the first table cell for “${columnMapLabel(mapColumn)}” (header text above the table is ignored)`
+                ? columnMapParseMode(mapColumn) === 'unit'
+                  ? `Map column: click Enhet / unit cell for “${columnMapLabel(mapColumn)}” — only the unit (D from “1 D”) is taken`
+                  : columnMapParseMode(mapColumn) === 'numeric' &&
+                      (mapColumn === 'purchaseQuantity' ||
+                        mapColumn === 'stockTakingQuantity')
+                    ? `Map column: click Levert antall / delivered qty for “${columnMapLabel(mapColumn)}” (not Bestilt antall / ordered). Empty cells stay empty.`
+                    : `Map column: click the first table cell for “${columnMapLabel(mapColumn)}” (header text above the table is ignored)`
                 : null
             }
             onColumnMapSeedPick={handleColumnMapSeedPick}
@@ -1057,6 +1081,7 @@ export default function DocumentDetailPage() {
                 mapColumn={mapColumn}
                 onStartMapColumn={handleStartMapColumn}
                 onCancelMapColumn={handleCancelMapColumn}
+                confirmSignal={lineConfirmSignal}
                 saving={
                   saveLineMutation.isPending ||
                   addLineMutation.isPending ||
@@ -1105,8 +1130,8 @@ export default function DocumentDetailPage() {
                 Map “{columnMapLabel(mapPreview.column)}”
               </h2>
               <p className="mt-1 text-sm text-slate-400">
-                Values detected on page {mapPreview.page}, top → bottom. Apply
-                to fill all matching line items in one step.
+                Values matched to rows by PDF position (empty cells stay empty
+                — no shifting). Edit any New value before applying.
               </p>
             </div>
             <div className="min-h-0 flex-1 overflow-auto px-5 py-3">
@@ -1124,16 +1149,27 @@ export default function DocumentDetailPage() {
                       key={row.lineItemId}
                       className="border-t border-white/5 text-slate-300"
                     >
-                      <td className="py-1.5 pr-2">{row.lineLabel}</td>
-                      <td className="py-1.5 pr-2 text-slate-500">
+                      <td className="py-1.5 pr-2 align-middle">
+                        {row.lineLabel}
+                      </td>
+                      <td className="py-1.5 pr-2 align-middle text-slate-500">
                         {row.previous ?? '—'}
                       </td>
-                      <td
-                        className={`py-1.5 font-medium ${
-                          row.next ? 'text-emerald-300' : 'text-slate-600'
-                        }`}
-                      >
-                        {row.next ?? '—'}
+                      <td className="py-1.5 align-middle">
+                        <input
+                          type="text"
+                          value={row.next ?? ''}
+                          disabled={bulkColumnMutation.isPending}
+                          placeholder="—"
+                          aria-label={`New value for ${row.lineLabel}`}
+                          onChange={(e) =>
+                            handleMapPreviewValueChange(
+                              row.lineItemId,
+                              e.target.value,
+                            )
+                          }
+                          className="w-full min-w-[6rem] rounded-md border border-white/10 bg-[#0f1419] px-2 py-1.5 text-sm font-medium text-emerald-300 outline-none placeholder:text-slate-600 focus:border-[#3b82f6]/60 focus:ring-1 focus:ring-[#3b82f6]/40 disabled:opacity-50"
+                        />
                       </td>
                     </tr>
                   ))}
@@ -1161,7 +1197,7 @@ export default function DocumentDetailPage() {
                 type="button"
                 disabled={
                   bulkColumnMutation.isPending ||
-                  !mapPreview.assignments.some((a) => a.next)
+                  !mapPreview.assignments.some((a) => a.next?.trim())
                 }
                 onClick={() => void handleApplyColumnMap()}
                 className="rounded-md bg-[#3b82f6] px-3.5 py-2 text-sm font-semibold text-white hover:bg-[#2563eb] disabled:opacity-50"
@@ -1169,7 +1205,8 @@ export default function DocumentDetailPage() {
                 {bulkColumnMutation.isPending
                   ? 'Applying…'
                   : `Apply to ${
-                      mapPreview.assignments.filter((a) => a.next).length
+                      mapPreview.assignments.filter((a) => a.next?.trim())
+                        .length
                     } rows`}
               </button>
             </div>

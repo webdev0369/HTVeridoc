@@ -1,6 +1,8 @@
 import { DynamicModule, Logger, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
+import { QueueAdminController } from './queue-admin.controller';
+import { QueueAdminService } from './queue-admin.service';
 import {
   QUEUE_ENABLED,
   checkRedisBullMqCompat,
@@ -24,7 +26,11 @@ export class QueueModule {
       return {
         module: QueueModule,
         global: true,
-        providers: [{ provide: QUEUE_ENABLED, useValue: false }],
+        controllers: [QueueAdminController],
+        providers: [
+          { provide: QUEUE_ENABLED, useValue: false },
+          QueueAdminService,
+        ],
         exports: [QUEUE_ENABLED],
       };
     }
@@ -55,7 +61,11 @@ export class QueueModule {
           },
         }),
       ],
-      providers: [{ provide: QUEUE_ENABLED, useValue: true }],
+      controllers: [QueueAdminController],
+      providers: [
+        { provide: QUEUE_ENABLED, useValue: true },
+        QueueAdminService,
+      ],
       exports: [QUEUE_ENABLED, BullModule],
     };
   }

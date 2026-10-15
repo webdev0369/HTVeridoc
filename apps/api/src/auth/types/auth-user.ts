@@ -7,4 +7,6 @@ export interface AuthUser {
   organizationId: string;
   role: RoleCode;
   permissions: PermissionCode[];
+  /** Set on handoff editor-link JWTs — scoped to one document. */
+  documentId?: string;
 }

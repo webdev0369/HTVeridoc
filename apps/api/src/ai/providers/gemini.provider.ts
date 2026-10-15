@@ -375,8 +375,11 @@ Return JSON only in this exact shape:
 Rules:
 - Include every product / fee / cancelled row — do not stop after the first line.
 - Prefer compact values; omit null fields when possible.
-- packaging = full Pakning text (e.g. "PK á 200 STK").
-- purchaseQuantity from Antall/Kvt; stockTakingQuantityPerPurchaseUnit from á N in Pakning.
+- packaging = full Pakning text (e.g. "PK á 200 STK", "à 12 PK").
+- purchaseQuantity: prefer Levert antall / Delivered qty when Bestilt+Levert both exist; never use Bestilt when Levert is present; if Levert blank leave null.
+- Simple Pakning "à N UNIT" + Kvt: stockTakingQuantity = N, stockTakingQuantityPerPurchaseUnit = N ÷ Kvt (e.g. Kvt=4, à 12 → stock=12, conversion=3).
+- Nested "KRT á 12 FL": stockTakingQuantityPerPurchaseUnit = 12 (factor).
+- Enhet → purchaseUnit / stocktakingUnit.
 - File: ${request.fileName}`;
 
     await emit(

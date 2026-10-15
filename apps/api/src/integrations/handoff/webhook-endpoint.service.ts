@@ -22,6 +22,17 @@ export interface WebhookEndpointPublicDto {
   updatedAt: string | null;
 }
 
+export interface WebhookUpsertResult extends WebhookEndpointPublicDto {
+  /** Present only when a new secret was created on this save — show once. */
+  generatedSecret?: string;
+}
+
+export interface RotateSecretResult {
+  /** Plaintext signing secret — shown once; store in partner BE env. */
+  secret: string;
+  webhook: WebhookEndpointPublicDto;
+}
+
 @Injectable()
 export class WebhookEndpointService {
   constructor(
@@ -49,10 +60,10 @@ export class WebhookEndpointService {
       };
     }
     return {
-      configured: true,
-      url: row.url,
+      configured: Boolean(row.url?.trim()),
+      url: row.url?.trim() ? row.url : null,
       hasSecret: Boolean(row.secret),
-      isActive: row.isActive,
+      isActive: row.isActive && Boolean(row.url?.trim()),
       updatedAt: row.updatedAt?.toISOString() ?? null,
     };
   }
@@ -60,7 +71,7 @@ export class WebhookEndpointService {
   async upsert(
     organizationId: string,
     dto: UpsertWebhookDto,
-  ): Promise<WebhookEndpointPublicDto> {
+  ): Promise<WebhookUpsertResult> {
     const url = dto.url.trim();
     if (!url) {
       throw new BadRequestException('Webhook URL is required');
@@ -79,20 +90,47 @@ export class WebhookEndpointService {
     row.url = url;
     row.isActive = dto.isActive ?? true;
 
+    let generatedSecret: string | undefined;
     if (dto.clearSecret) {
       row.secret = null;
     } else if (dto.secret != null && dto.secret.trim() !== '') {
       row.secret = encryptSecret(dto.secret.trim(), this.appSecret());
     } else if (!row.secret) {
       // Auto-generate a signing secret on first save when none provided.
-      row.secret = encryptSecret(
-        randomBytes(24).toString('base64url'),
-        this.appSecret(),
-      );
+      generatedSecret = randomBytes(32).toString('base64url');
+      row.secret = encryptSecret(generatedSecret, this.appSecret());
     }
 
     await this.repo.save(row);
-    return this.getPublic(organizationId);
+    return {
+      ...(await this.getPublic(organizationId)),
+      ...(generatedSecret ? { generatedSecret } : {}),
+    };
+  }
+
+  /**
+   * Generate a new webhook signing secret (Stripe-style).
+   * Plaintext is returned once; only the encrypted form is stored.
+   */
+  async rotateSecret(organizationId: string): Promise<RotateSecretResult> {
+    const plaintext = randomBytes(32).toString('base64url');
+    let row = await this.repo.findOne({ where: { organizationId } });
+    if (!row) {
+      // Secret can be created before receiver URL; webhook stays inactive.
+      row = this.repo.create({
+        organizationId,
+        url: '',
+        secret: encryptSecret(plaintext, this.appSecret()),
+        isActive: false,
+      });
+    } else {
+      row.secret = encryptSecret(plaintext, this.appSecret());
+    }
+    await this.repo.save(row);
+    return {
+      secret: plaintext,
+      webhook: await this.getPublic(organizationId),
+    };
   }
 
   async disable(organizationId: string): Promise<WebhookEndpointPublicDto> {
@@ -110,7 +148,7 @@ export class WebhookEndpointService {
     secret: string | null;
   } | null> {
     const row = await this.repo.findOne({ where: { organizationId } });
-    if (!row?.isActive || !row.url) return null;
+    if (!row?.isActive || !row.url?.trim()) return null;
     return {
       url: row.url,
       secret: decryptSecret(row.secret, this.appSecret()),

@@ -3,15 +3,17 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
-import { setTokens } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 /**
- * Handoff editor entry: other systems open /editor/<jwt>.
- * We store the token as the access session and redirect to the document page.
+ * Handoff editor entry: partner systems open /editor/<jwt> in an iframe.
+ * Hydrates a scoped session and opens the document review UI in embed mode
+ * (no SaaS login, dashboard, or top navigation).
  */
 export default function EditorLinkPage() {
   const params = useParams<{ token: string }>();
   const router = useRouter();
+  const { acceptEditorSession } = useAuth();
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,35 +31,26 @@ export default function EditorLinkPage() {
     }
 
     try {
-      const payloadPart = token.split('.')[1];
-      if (!payloadPart) throw new Error('Invalid token');
-      const json = JSON.parse(
-        atob(payloadPart.replace(/-/g, '+').replace(/_/g, '/')),
-      ) as { documentId?: string; typ?: string; exp?: number };
-
-      if (json.typ && json.typ !== 'editor_link') {
-        throw new Error('Not an editor link token');
-      }
-      if (json.exp && json.exp * 1000 < Date.now()) {
-        throw new Error('Editor link has expired');
-      }
-      if (!json.documentId) {
-        throw new Error('Token missing documentId');
-      }
-
-      // Editor JWT is used as Bearer access; refresh unused for handoff sessions.
-      setTokens(token, token);
-      router.replace(`/documents/${json.documentId}`);
+      const documentId = acceptEditorSession(token);
+      router.replace(`/documents/${documentId}?embed=1`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid editor link');
     }
-  }, [params?.token, router]);
+  }, [params?.token, router, acceptEditorSession]);
 
   if (error) {
+    const expired =
+      /expired|invalid/i.test(error) || error.includes('editor link');
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-2 bg-slate-950 px-4 text-center text-slate-200">
-        <p className="text-lg font-medium">Cannot open editor</p>
-        <p className="text-sm text-slate-400">{error}</p>
+      <div className="flex min-h-screen flex-col items-center justify-center gap-3 bg-[#0b0f14] px-6 text-center">
+        <p className="text-lg font-semibold text-slate-100">
+          {expired ? 'Session expired' : 'Cannot open editor'}
+        </p>
+        <p className="max-w-md text-sm text-slate-400">
+          {expired
+            ? 'Close and reopen review from the host app. Your partner application should fetch a fresh editor link before the previous one expires.'
+            : error}
+        </p>
       </div>
     );
   }

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Cable, Loader2, PlugZap, Save, Unplug } from 'lucide-react';
 import { toast } from 'sonner';
@@ -146,23 +147,32 @@ export default function ExportIntegrationPage() {
     <AppShell>
       <PageHeader
         title="Export destination"
-        description="Per-organization connection for sending approved documents. Use Sandbox for safe testing; switch to Live when destination credentials are ready."
+        description="Legacy store-order export connection. Product handoff uses Approve → webhooks only."
         actions={
-          data?.configured ? (
-            <Badge variant={data.isActive ? 'default' : 'secondary'}>
-              {data.isActive
-                ? data.mode === 'mock'
-                  ? 'Sandbox connected'
-                  : 'Live connected'
-                : 'Disabled'}
-            </Badge>
-          ) : (
-            <Badge variant="secondary">Not configured</Badge>
-          )
+          <Badge variant="secondary">Deferred</Badge>
         }
       />
 
       <div className="mx-auto max-w-2xl space-y-6 px-4 pb-10 md:px-6">
+        <div className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-800">
+          <p className="font-medium">Deferred — not part of the product flow</p>
+          <p className="mt-1 text-slate-700/90">
+            HTVeriDoc notifies partner systems via{' '}
+            <Link
+              href="/settings/integrations/webhooks"
+              className="font-medium text-primary underline-offset-2 hover:underline"
+            >
+              Webhooks
+            </Link>{' '}
+            after Approve. Direct export-to-destination is kept for internal
+            experiments only; see{' '}
+            <code className="rounded bg-white px-1 text-xs">
+              docs/export-destination-contract.md
+            </code>
+            .
+          </p>
+        </div>
+
         {!connectionQuery.isLoading && !data?.configured ? (
           <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-950">
             <p className="font-medium">Not configured yet</p>
