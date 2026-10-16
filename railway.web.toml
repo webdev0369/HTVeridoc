@@ -1,0 +1,16 @@
+# Railway config for the Web service.
+# In Railway: Settings → Config-as-code → set file path to railway.web.toml
+# Set build arg / env NEXT_PUBLIC_API_URL to the public API URL before building.
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "apps/web/Dockerfile"
+
+[deploy]
+# Must not use npm/pnpm: the runner image has no package manager (node only).
+# Do not set a publish directory — this is a Next.js standalone server, not a static site.
+startCommand = "node apps/web/server.js"
+healthcheckPath = "/"
+healthcheckTimeout = 40
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5

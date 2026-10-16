@@ -109,7 +109,7 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 | Postgres | Railway plugin | Set `DATABASE_URL` on API |
 | Redis | Railway plugin | Set `REDIS_URL` on API (BullMQ; Redis 5+) |
 | API | Dockerfile `apps/api/Dockerfile` or root [`railway.toml`](railway.toml) | Migrations run on boot via `docker/api-entrypoint.sh`. Start command must be `/entrypoint.sh` (not `pnpm …`) — the runtime image has no pnpm. |
-| Web | Dockerfile `apps/web/Dockerfile` (preferred) or Nixpacks | Build with `NEXT_PUBLIC_API_URL` = public API URL. Docker start is `node apps/web/server.js`. If using Nixpacks, start command stays `pnpm --filter @htveridoc/web start` (`next start`). Do not use `next start` with Docker standalone output. |
+| Web | Dockerfile `apps/web/Dockerfile` or [`railway.web.toml`](railway.web.toml) | Build with `NEXT_PUBLIC_API_URL` = public API URL. Start command must be `node apps/web/server.js` (not `npm`/`pnpm`). No publish directory. If using Nixpacks instead, start stays `pnpm --filter @htveridoc/web start` — do not use `next start` with Docker standalone output. |
 
 **API listen port:** Railway injects `PORT`. The API uses `PORT` when set, otherwise `API_PORT` (default `3001`). Health check: `GET /health`.
 
@@ -131,7 +131,7 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 
 **Volume:** Attach a persistent volume to the API service at `STORAGE_ROOT` so PDFs survive restarts.
 
-Example root config for the API service: [`railway.toml`](railway.toml) (`healthcheckPath = /health`).
+Example configs: API [`railway.toml`](railway.toml) (`healthcheckPath = /health`); Web [`railway.web.toml`](railway.web.toml) (point each service’s Config-as-code file path at the matching file).
 
 ## Smoke checklist
 

@@ -25,11 +25,12 @@ async function bootstrap() {
   );
 
   // Railway / cloud injects PORT; local/dev uses API_PORT (default 3001).
+  // Bind 0.0.0.0 so platform healthchecks can reach the process (not only localhost).
   const port =
     Number(process.env.PORT) ||
     config.get<number>('API_PORT', 3001);
-  await app.listen(port);
-  Logger.log(`HTVeridoc API listening on http://localhost:${port}`, 'Bootstrap');
+  await app.listen(port, '0.0.0.0');
+  Logger.log(`HTVeridoc API listening on http://0.0.0.0:${port}`, 'Bootstrap');
 }
 
 bootstrap();
