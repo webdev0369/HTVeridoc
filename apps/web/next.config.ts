@@ -11,7 +11,11 @@ const frameAncestors =
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
-  output: 'standalone',
+  // Standalone is for the Docker image (smaller runtime). Railway Nixpacks /
+  // `pnpm start` uses `next start`, which does not support standalone output.
+  ...(process.env.NEXT_OUTPUT === 'standalone'
+    ? { output: 'standalone' as const }
+    : {}),
   async headers() {
     // CSP frame-ancestors controls who may iframe the PDF/review UI.
     const csp = `frame-ancestors ${frameAncestors}`;

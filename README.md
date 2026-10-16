@@ -108,8 +108,8 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 |---------|--------|--------|
 | Postgres | Railway plugin | Set `DATABASE_URL` on API |
 | Redis | Railway plugin | Set `REDIS_URL` on API (BullMQ; Redis 5+) |
-| API | Dockerfile `apps/api/Dockerfile` or root [`railway.toml`](railway.toml) | Migrations run on boot via `docker/api-entrypoint.sh` |
-| Web | `apps/web` (Next.js) | Build with `NEXT_PUBLIC_API_URL` = public API URL |
+| API | Dockerfile `apps/api/Dockerfile` or root [`railway.toml`](railway.toml) | Migrations run on boot via `docker/api-entrypoint.sh`. Start command must be `/entrypoint.sh` (not `pnpm …`) — the runtime image has no pnpm. |
+| Web | Dockerfile `apps/web/Dockerfile` (preferred) or Nixpacks | Build with `NEXT_PUBLIC_API_URL` = public API URL. Docker start is `node apps/web/server.js`. If using Nixpacks, start command stays `pnpm --filter @htveridoc/web start` (`next start`). Do not use `next start` with Docker standalone output. |
 
 **API listen port:** Railway injects `PORT`. The API uses `PORT` when set, otherwise `API_PORT` (default `3001`). Health check: `GET /health`.
 
@@ -152,6 +152,10 @@ Example root config for the API service: [`railway.toml`](railway.toml) (`health
 | GET | `/auth/me` | Current user + orgs |
 | GET | `/organizations/current` | Active org |
 | GET | `/users` | Org members |
+| GET | `/users/roles` | Role catalog |
+| POST | `/users` | Add org member (`user.manage`) |
+| PATCH | `/users/:id/role` | Change role (`user.manage`) |
+| PATCH | `/users/:id/status` | Enable/disable (`user.manage`) |
 | POST | `/documents` | multipart `file` PDF |
 | GET | `/documents` | Paginated list |
 | GET | `/documents/:id` | Metadata |
@@ -181,12 +185,14 @@ Example root config for the API service: [`railway.toml`](railway.toml) (`health
 
 After parsing and review, **Approve** notifies other systems via webhooks (extraction payload + optional editor link).
 
-- **In-app (orgs/customers):** Configuration → **API credentials** (org ID, API URL, generate webhook secret) · Guides → **Integration guide**
-- **Partner BE pattern (not FE):** `docs/partner-be-integration.md`
-- **Partner API reference (headers/body/response):** `docs/partner-api-reference.md`
-- **Partner FE/BE tester prompts:** `docs/partner-tester-prompts.md`
-- **Developer detail:** `docs/handoff-webhooks-editor.md`, `docs/customer-integration-guide.md`
-- **Configure:** Settings → Webhooks
+**Path:** Partner FE → Partner BE → HTVeriDoc API; HTVeriDoc → Partner BE webhooks (never call HTVeriDoc from the browser).
+
+- **Start here:** [`docs/customer-integration-guide.md`](docs/customer-integration-guide.md)
+- **In-app:** Configuration → **API credentials** · Guides → **Integration guide** · Settings → **Webhooks**
+- **Partner BE checklist:** `docs/partner-be-integration.md`
+- **HTTP contract:** `docs/partner-api-reference.md`
+- **Tester prompts:** `docs/partner-tester-prompts.md`
+- **Webhooks / editor detail:** `docs/handoff-webhooks-editor.md`
 
 Legacy TotalCtrl store-orders export is not part of the product flow (`docs/export-destination-contract.md`).
 

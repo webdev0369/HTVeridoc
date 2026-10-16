@@ -49,12 +49,20 @@ export default function WebhookIntegrationGuidePage() {
                   <td className="px-3 py-2">Extraction completed</td>
                 </tr>
                 <tr className="border-t">
+                  <td className="px-3 py-2 font-mono">document.validating</td>
+                  <td className="px-3 py-2">
+                    Validation running (in validate)
+                  </td>
+                </tr>
+                <tr className="border-t">
                   <td className="px-3 py-2 font-mono">document.ready_for_review</td>
                   <td className="px-3 py-2">Ready for human review</td>
                 </tr>
                 <tr className="border-t">
                   <td className="px-3 py-2 font-mono">document.in_review</td>
-                  <td className="px-3 py-2">Review started / reopened</td>
+                  <td className="px-3 py-2">
+                    Review started / reopened (in review)
+                  </td>
                 </tr>
                 <tr className="border-t">
                   <td className="px-3 py-2 font-mono">document.approved</td>

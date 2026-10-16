@@ -12,6 +12,7 @@ RUN pnpm install --frozen-lockfile --filter @htveridoc/web...
 COPY apps/web ./apps/web
 ARG NEXT_PUBLIC_API_URL=http://localhost:3001
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_OUTPUT=standalone
 RUN pnpm --filter @htveridoc/web build
 
 FROM node:20-bookworm-slim AS runner

@@ -41,14 +41,35 @@ export const LINE_REVIEW_COLUMN_LABELS: Record<LineReviewColumn, string> = {
   amount: 'Total amount',
 };
 
+/** PDF label tokens that sit next to header dates (helps when AI bbox is wrong). */
+export function dateFieldAnchorHints(fieldKey: string): string[] | undefined {
+  if (fieldKey === 'orderDate') {
+    return ['Ordredato', 'Order date', 'Order Date', 'Bestillingsdato'];
+  }
+  if (fieldKey === 'documentDate') {
+    return [
+      'Dokumentdato',
+      'Document date',
+      'Document Date',
+      'Dato',
+      'Date',
+    ];
+  }
+  return undefined;
+}
+
 export type ReviewSelection =
   | {
       type: 'field';
       id: string;
+      /** Header field key (e.g. orderDate) — used for date normalize/locate. */
+      fieldKey?: string;
       label: string;
       value: string | null;
       page: number | null;
       boundingBox?: BoundingBox;
+      /** Optional PDF label hints (e.g. Ordredato for orderDate). */
+      anchorHints?: string[];
       tone: HighlightTone;
     }
   | {

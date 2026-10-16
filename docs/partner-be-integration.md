@@ -1,86 +1,74 @@
-# Partner backend ↔ HTVeriDoc (correct pattern)
+# Partner backend ↔ HTVeriDoc
 
-HTVeriDoc integrates **server-to-server**. The partner frontend must **not** call HTVeriDoc APIs.
+Server-to-server only. See the full customer path in [`customer-integration-guide.md`](./customer-integration-guide.md).
 
-## Do not do this (FE)
-
-```ts
-// ❌ Wrong — FE must not own HTVeriDoc calls
-export const htveridocTester = {
-  login: () => `admin/htveridoc-tester/login`,
-  upload: () => `admin/htveridoc-tester/documents/upload`,
-  process: (id) => `admin/htveridoc-tester/documents/${id}/process`,
-  // ...
-};
-```
-
-Putting login / upload / process / approve on the **frontend** (or FE “tester” routes that the browser drives) exposes credentials and couples the UI to HTVeriDoc.
-
-## Do this instead (BE)
+## Architecture (locked)
 
 ```text
 Partner FE  →  Partner BE only
-Partner BE  →  HTVeriDoc API  (JWT, upload, process, approve, editor-link)
+Partner BE  →  HTVeriDoc API  (JWT, upload, process, editor-link, approve)
 HTVeriDoc   →  Partner BE webhook receiver  (status + extraction)
 ```
 
-| Layer | Responsibility |
-|-------|----------------|
-| Partner FE | Upload to **your** API; show status from **your** DB; **embed** editor `url` from **your** BE in an iframe |
-| Partner BE | Store HTVeriDoc credentials; call HTVeriDoc; create editor-link; return `url` to FE; receive webhooks |
-| HTVeriDoc | Parse / review / approve; issue editor URLs; POST events to your receiver URL |
-
-## Partner BE checklist
-
-1. Env (server only): `HTVERIDOC_BASE_URL`, service user email/password or token strategy  
-2. `POST {HTVERIDOC}/auth/login` → cache `accessToken` server-side  
-3. `POST {HTVERIDOC}/documents` (multipart `file`)  
-4. `POST {HTVERIDOC}/documents/:id/process`  
-5. Poll `GET .../documents/:id` and `GET .../extraction`  
-6. `POST {HTVERIDOC}/integrations/handoff/editor-link` → return `{ url }` to FE (for iframe embed)  
-7. `POST {HTVERIDOC}/documents/:id/approve` when your workflow confirms data  
-8. Implement webhook route, e.g. `POST /webhook/htveridoc/document-status-update`  
-9. Register that URL in HTVeriDoc → Settings → Webhooks → Test (must be HTTP 2xx)
-
-Auth on outbound calls: `Authorization: Bearer <accessToken>`
-
-### Editor embed (PDF viewer in partner UI)
+### Editor embed
 
 ```text
-FE  →  GET/POST /integrations/htveridoc/jobs/:id/editor-link   (partner BE)
-BE  →  POST /integrations/handoff/editor-link                  (HTVeriDoc)
-BE  →  { url, expiresAt }                                      (to FE)
-FE  →  <iframe src={url} />                                    (inside partner product)
+FE  →  your BE  …/editor-link
+BE  →  HTVeriDoc POST /integrations/handoff/editor-link
+BE  →  { url, expiresAt }  to FE
+FE  →  <iframe src={url} />
 ```
 
-- FE must **not** invent `/editor/...` URLs or call HTVeriDoc for the link.
-- Prefer a fresh link from your BE; webhook `editorUrl` is optional cache only.
+- FE must **not** invent `/editor/...` URLs or call HTVeriDoc.  
+- Re-fetch a fresh link from your BE ~5–15 minutes before `expiresAt`.  
+- Optional webhook `editorUrl` is cache-only; prefer your BE endpoint.
 
-## Webhook (inbound to partner BE)
+## Partner BE env (server only)
 
-HTVeriDoc `POST`s JSON with headers:
+Copy from HTVeriDoc **API credentials** (never put in FE):
 
-- `X-HTVeriDoc-Event`
-- `X-HTVeriDoc-Signature` (HMAC-SHA256 of raw body, if secret configured)
-- `X-HTVeriDoc-Delivery`
+```text
+HTVERIDOC_API_URL=https://<htveridoc-api-host>
+HTVERIDOC_EMAIL=<integration-user@your-company.com>
+HTVERIDOC_PASSWORD=<password>
+HTVERIDOC_ORGANIZATION_ID=<uuid>
+HTVERIDOC_WEBHOOK_SECRET=<from credentials page>
+```
 
+No `HTVERIDOC_WEB_URL` / web origin — editor URLs come back as `{ url }` from the API.
+
+## BE checklist
+
+1. Login `POST /auth/login` → cache access token  
+2. Upload `POST /documents` (multipart `file`)  
+3. Process `POST /documents/:id/process`  
+4. Poll `GET /documents/:id` (+ extraction)  
+5. Editor link `POST /integrations/handoff/editor-link` → return `{ url, expiresAt }` to FE  
+6. Approve `POST /documents/:id/approve` when ready  
+7. Webhook receiver (e.g. `POST /webhook/htveridoc/document-status-update`)  
+8. Register URL in HTVeriDoc → Webhooks → Test (HTTP 2xx)
+
+Outbound auth: `Authorization: Bearer <accessToken>`
+
+## Webhook inbound
+
+Headers: `X-HTVeriDoc-Event`, `X-HTVeriDoc-Signature`, `X-HTVeriDoc-Delivery`  
 Main event: `document.approved` — use `extraction.fields` and `extraction.lineItems`.
 
 ## FE after BE is ready
 
-Partner FE only needs **your** endpoints, for example:
+Only **your** endpoints, e.g.:
 
-- `POST /integrations/htveridoc/jobs` (your BE then calls HTVeriDoc)
-- `GET /integrations/htveridoc/jobs/:id` (status from your DB)
-- `GET|POST /integrations/htveridoc/jobs/:id/editor-link` → embed returned `url` in iframe
-- `POST /integrations/htveridoc/jobs/:id/approve`
+- `POST /integrations/htveridoc/jobs`  
+- `GET /integrations/htveridoc/jobs/:id`  
+- `GET|POST /integrations/htveridoc/jobs/:id/editor-link` → iframe `src`  
+- `POST /integrations/htveridoc/jobs/:id/approve`  
 
-No `htveridoc-tester` routes in the browser. Editor iframe `src` = URL from **your BE only**.
+No `htveridoc-tester` routes in the browser.
 
 ## Related
 
-- **Full API contract (headers / body / response):** `docs/partner-api-reference.md`
-- **Copy-paste FE/BE tester prompts:** `docs/partner-tester-prompts.md`
-- Events & payloads: `docs/handoff-webhooks-editor.md`
-- Customer overview: `docs/customer-integration-guide.md`
-- In-app: Guides → Integration guide → **API reference**
+- Customer overview: [`customer-integration-guide.md`](./customer-integration-guide.md)  
+- HTTP contract: [`partner-api-reference.md`](./partner-api-reference.md)  
+- Tester prompts: [`partner-tester-prompts.md`](./partner-tester-prompts.md)  
+- Webhooks detail: [`handoff-webhooks-editor.md`](./handoff-webhooks-editor.md)  

@@ -58,6 +58,11 @@ export class ValidationService {
 
     document.status = DocumentStatus.VALIDATING;
     await this.documentsRepo.save(document);
+    this.handoff.notifyStatus(
+      organizationId,
+      documentId,
+      DocumentStatus.VALIDATING,
+    );
 
     const modeMap = await this.fieldConfigService.getModeMap(
       organizationId,

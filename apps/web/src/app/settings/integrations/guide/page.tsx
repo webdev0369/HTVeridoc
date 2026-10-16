@@ -195,17 +195,25 @@ export default function IntegrationGuidePage() {
                   </p>
                 </Section>
 
-                <Section title="End-to-end flow">
+                <Section title="One integration path">
                   <pre className="overflow-x-auto rounded-lg border bg-muted/40 p-4 text-xs text-foreground">
-{`Upload PDF → Extract (AI) → Review → Approve
-                                      ↓
-                         Webhook to your system
-                         (status + extraction + editor link)`}
+{`Your FE  →  Your BE only
+Your BE  →  HTVeriDoc API   (login, upload, process, editor-link, approve)
+HTVeriDoc →  Your BE webhook (status + extraction)
+Your FE  ←  Your BE only    (status + iframe url — never call HTVeriDoc from the browser)`}
                   </pre>
                   <p>
                     <strong className="text-foreground">Approve → webhooks only.</strong>{' '}
-                    HTVeriDoc does not create store-orders. Legacy export
-                    destination UI is deferred and not part of this product path.
+                    HTVeriDoc does not create store-orders. Partner BE copies
+                    API URL, org ID, login, and webhook secret from{' '}
+                    <Link
+                      href="/settings/integrations/credentials"
+                      className="font-medium text-primary underline-offset-2 hover:underline"
+                    >
+                      API credentials
+                    </Link>
+                    — not a “web origin” (editor URLs come back as{' '}
+                    <Code>{'{ url }'}</Code> from editor-link).
                   </p>
                 </Section>
 
@@ -416,9 +424,25 @@ export default function IntegrationGuidePage() {
                         </tr>
                         <tr className="border-t">
                           <td className="px-3 py-2 font-mono">
+                            document.validating
+                          </td>
+                          <td className="px-3 py-2">
+                            Validation running (in validate)
+                          </td>
+                        </tr>
+                        <tr className="border-t">
+                          <td className="px-3 py-2 font-mono">
                             document.ready_for_review
                           </td>
                           <td className="px-3 py-2">Ready for review</td>
+                        </tr>
+                        <tr className="border-t">
+                          <td className="px-3 py-2 font-mono">
+                            document.in_review
+                          </td>
+                          <td className="px-3 py-2">
+                            Review started / reopened (in review)
+                          </td>
                         </tr>
                         <tr className="border-t">
                           <td className="px-3 py-2 font-mono">
@@ -482,10 +506,17 @@ export default function IntegrationGuidePage() {
                     <Code>admin/htveridoc-tester/...</Code>.
                   </p>
                   <pre className="overflow-x-auto rounded-lg border bg-muted/40 p-4 text-xs text-foreground">
-{`Partner FE  →  Partner BE  →  HTVeriDoc API
-                     ↑
-              HTVeriDoc webhooks (status + extraction)`}
+{`Partner FE  →  Partner BE only
+Partner BE  →  HTVeriDoc API
+HTVeriDoc   →  Partner BE webhook
+Partner FE  ←  Partner BE (status + editor { url } for iframe)`}
                   </pre>
+                  <p>
+                    Env for partner BE: API URL, email/password, org ID, webhook
+                    secret. Do <strong className="text-foreground">not</strong>{' '}
+                    configure a HTVeriDoc web origin — use the{' '}
+                    <Code>url</Code> from editor-link.
+                  </p>
                 </Section>
 
                 <Section title="What your backend implements">
@@ -576,8 +607,8 @@ FE → iframe      src={url}   // PDF viewer + editor inside partner UI`}
 
                 <p className="flex items-center gap-2 text-xs text-muted-foreground">
                   <BookOpen className="h-3.5 w-3.5" />
-                  Full HTTP contract:{' '}
-                  <Code>docs/partner-api-reference.md</Code> — also open the{' '}
+                  Full HTTP contract (methods, headers, bodies, responses): open
+                  the{' '}
                   <strong className="text-foreground">API reference</strong>{' '}
                   tab.
                 </p>
@@ -757,8 +788,9 @@ Body (document.approved):
                 </Section>
 
                 <p className="text-xs text-muted-foreground">
-                  Full tables, error codes, and signature verify example:{' '}
-                  <Code>docs/partner-api-reference.md</Code>
+                  Use the endpoints and examples above for partner BE
+                  integration. Error codes and signature verification are
+                  included in this tab.
                 </p>
               </CardContent>
             </Card>

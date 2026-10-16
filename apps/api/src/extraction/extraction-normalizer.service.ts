@@ -6,6 +6,10 @@ import {
   HeaderFieldKey,
   PoConfirmationExtraction,
 } from '../ai/schemas/po-confirmation.schema';
+import {
+  isDateHeaderField,
+  normalizeDateValue,
+} from '../common/date-normalize';
 import { DocumentType } from '../common/enums';
 import { Document } from '../documents/entities/document.entity';
 import { FieldCorrectionService } from '../fields/field-correction.service';
@@ -122,6 +126,11 @@ export class ExtractionNormalizerService {
             currentValue = remembered;
             isUserEdited = true;
           }
+        }
+
+        // Dates: store ISO YYYY-MM-DD; keep AI source bbox for PDF highlight.
+        if (isDateHeaderField(key) && currentValue) {
+          currentValue = normalizeDateValue(currentValue);
         }
 
         const field = manager.create(ExtractionField, {

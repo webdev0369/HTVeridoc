@@ -1,4 +1,5 @@
 import {
+  dateFieldAnchorHints,
   getLineColumnValue,
   lineAnchorHints,
   lineSelectionLabel,
@@ -59,10 +60,12 @@ export function buildReviewQueue(
     queue.push({
       type: 'field',
       id: field.id,
+      fieldKey: field.fieldKey,
       label: field.fieldLabel,
       value: field.currentValue,
       page: field.source?.page ?? null,
       boundingBox: field.source?.boundingBox,
+      anchorHints: dateFieldAnchorHints(field.fieldKey),
       tone: errorFieldKeys.has(field.fieldKey)
         ? 'error'
         : field.isUserEdited

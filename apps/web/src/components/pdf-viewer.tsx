@@ -9,6 +9,12 @@ import {
   type CSSProperties,
 } from 'react';
 import { fetchDocumentPdfBlob } from '@/lib/api';
+import {
+  dateSearchNeedles,
+  parseDateParts,
+  sameCalendarDate,
+  type DateParts,
+} from '@/lib/date-format';
 import type { BoundingBox } from '@/lib/types';
 
 export type HighlightTone = 'ai' | 'edited' | 'error';
@@ -105,6 +111,9 @@ function parseHighlightNumber(s: string | null | undefined): number | null {
   if (s == null) return null;
   const original = s.trim();
   if (!original) return null;
+
+  // Dates are not quantities (ISO or printed).
+  if (parseDateParts(original)) return null;
 
   // Qty + pack unit in one glyph run: "10 PK", "10PK" (not "500ml").
   const withUnit =
@@ -503,58 +512,68 @@ function findValueBoxes(
       }
     }
   } else {
-    // 1) Exact single-token match
-    for (const item of textItems) {
-      if (normalizeMatch(item.str) === needle) {
-        pushItem(item, 10_000 + needle.length);
-      }
-    }
+    // ISO dates ↔ printed EU dates (2026-08-05 ↔ 05.08.2026).
+    const needles = [raw, ...dateSearchNeedles(raw)];
+    const seenNeedle = new Set<string>();
 
-    // 2) Needle contained in one token → highlight only that substring width
-    for (const item of textItems) {
-      const hay = normalizeMatch(item.str);
-      if (hay === needle || !hay.includes(needle)) continue;
-      // Avoid matching short unit tokens inside longer words
-      if (needle.length <= 3 && hay.length > needle.length + 1) continue;
-      const box = substringBox(item, needle);
-      if (box) scored.push({ score: 5_000 + needle.length, box });
-    }
+    for (const candidate of needles) {
+      const n = normalizeMatch(candidate);
+      if (!n || seenNeedle.has(n)) continue;
+      seenNeedle.add(n);
 
-    // 3) Exact match across consecutive same-line tokens
-    for (let i = 0; i < textItems.length; i++) {
-      const window: PdfTextItem[] = [textItems[i]];
-      let joined = normalizeMatch(textItems[i].str);
-
-      for (let j = i + 1; j < Math.min(i + 10, textItems.length); j++) {
-        if (!sameLine(textItems[i], textItems[j])) break;
-        window.push(textItems[j]);
-        joined = normalizeMatch(window.map((t) => t.str).join(' '));
-
-        if (joined === needle) {
-          scored.push({
-            score: 9_000 + needle.length,
-            box: mergeBoxes(window),
-          });
-          break;
+      // 1) Exact single-token match
+      for (const item of textItems) {
+        if (normalizeMatch(item.str) === n) {
+          pushItem(item, 10_000 + n.length);
         }
+      }
 
-        if (joined.includes(needle) && joined.length > needle.length) {
-          for (let a = 0; a < window.length; a++) {
-            for (let b = a; b < window.length; b++) {
-              const slice = window.slice(a, b + 1);
-              const part = normalizeMatch(slice.map((t) => t.str).join(' '));
-              if (part === needle) {
-                scored.push({
-                  score: 8_500 + needle.length,
-                  box: mergeBoxes(slice),
-                });
+      // 2) Needle contained in one token → highlight only that substring width
+      for (const item of textItems) {
+        const hay = normalizeMatch(item.str);
+        if (hay === n || !hay.includes(n)) continue;
+        // Avoid matching short unit tokens inside longer words
+        if (n.length <= 3 && hay.length > n.length + 1) continue;
+        const box = substringBox(item, n);
+        if (box) scored.push({ score: 5_000 + n.length, box });
+      }
+
+      // 3) Exact match across consecutive same-line tokens
+      for (let i = 0; i < textItems.length; i++) {
+        const window: PdfTextItem[] = [textItems[i]];
+        let joined = normalizeMatch(textItems[i].str);
+
+        for (let j = i + 1; j < Math.min(i + 10, textItems.length); j++) {
+          if (!sameLine(textItems[i], textItems[j])) break;
+          window.push(textItems[j]);
+          joined = normalizeMatch(window.map((t) => t.str).join(' '));
+
+          if (joined === n) {
+            scored.push({
+              score: 9_000 + n.length,
+              box: mergeBoxes(window),
+            });
+            break;
+          }
+
+          if (joined.includes(n) && joined.length > n.length) {
+            for (let a = 0; a < window.length; a++) {
+              for (let b = a; b < window.length; b++) {
+                const slice = window.slice(a, b + 1);
+                const part = normalizeMatch(slice.map((t) => t.str).join(' '));
+                if (part === n) {
+                  scored.push({
+                    score: 8_500 + n.length,
+                    box: mergeBoxes(slice),
+                  });
+                }
               }
             }
+            break;
           }
-          break;
-        }
 
-        if (joined.length > needle.length + 24) break;
+          if (joined.length > n.length + 24) break;
+        }
       }
     }
   }
@@ -562,13 +581,13 @@ function findValueBoxes(
   if (scored.length === 0) return [];
 
   // Line position / item code beats a stale AI row bbox for ambiguous tokens.
-  const preferredY =
-    findAnchorY(textItems, opts?.anchorHints) ??
-    (opts?.near ? boxCenterY(opts.near) : null);
+  const fromAnchorY = findAnchorY(textItems, opts?.anchorHints);
+  const fromNearY = opts?.near ? boxCenterY(opts.near) : null;
+  const preferredY = fromAnchorY ?? fromNearY;
 
   const band = Math.max(opts?.near?.height ?? 0, 0.02) * 3;
 
-  const rank = (list: Scored[]) =>
+  const rankNear = (list: Scored[]) =>
     [...list].sort((a, b) => {
       if (preferredY != null) {
         const da = Math.abs(boxCenterY(a.box) - preferredY);
@@ -590,6 +609,13 @@ function findValueBoxes(
       return boxArea(a.box) - boxArea(b.box);
     });
 
+  // When AI bbox Y is wrong, ignore `near` and pick the best text hit.
+  const rankScore = (list: Scored[]) =>
+    [...list].sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return boxArea(a.box) - boxArea(b.box);
+    });
+
   if (preferredY != null) {
     const inBand = scored.filter(
       (s) => Math.abs(boxCenterY(s.box) - preferredY) <= band,
@@ -597,17 +623,106 @@ function findValueBoxes(
     // Stay on the anchored row when possible. If the AI bbox/`near` Y is
     // wrong (e.g. header), do NOT return [] — that parked the float at the
     // top of the page. Prefer the best text match on the page instead.
-    if (inBand.length > 0) return [rank(inBand)[0].box];
-    const fromAnchor = findAnchorY(textItems, opts?.anchorHints);
-    if (fromAnchor != null) {
+    if (inBand.length > 0) return [rankNear(inBand)[0].box];
+    if (fromAnchorY != null) {
       const anchorBand = scored.filter(
-        (s) => Math.abs(boxCenterY(s.box) - fromAnchor) <= band,
+        (s) => Math.abs(boxCenterY(s.box) - fromAnchorY) <= band,
       );
-      if (anchorBand.length > 0) return [rank(anchorBand)[0].box];
+      if (anchorBand.length > 0) return [rankNear(anchorBand)[0].box];
+    }
+    // Stale AI bbox only — don't pull toward a wrong Y.
+    return [rankScore(scored)[0].box];
+  }
+
+  return [rankNear(scored)[0].box];
+}
+
+/**
+ * Locate a calendar date on the page regardless of printed format.
+ * Prefer the glyph nearest the AI bbox / Ordredato label (detected position).
+ */
+function findDateValueBoxes(
+  textItems: PdfTextItem[],
+  target: DateParts,
+  opts?: {
+    near?: BoundingBox | null;
+    anchorHints?: string[] | null;
+  },
+): BoundingBox[] {
+  type Scored = { dist: number; area: number; box: BoundingBox };
+  const hits: Scored[] = [];
+
+  const push = (box: BoundingBox) => {
+    const preferredY =
+      findAnchorY(textItems, opts?.anchorHints) ??
+      (opts?.near ? boxCenterY(opts.near) : null);
+    const preferredX = opts?.near
+      ? opts.near.x + opts.near.width / 2
+      : null;
+    const cy = boxCenterY(box);
+    const cx = box.x + box.width / 2;
+    const dy = preferredY != null ? Math.abs(cy - preferredY) : 0;
+    const dx = preferredX != null ? Math.abs(cx - preferredX) : 0;
+    hits.push({ dist: dy * 2 + dx, area: boxArea(box), box });
+  };
+
+  for (const item of textItems) {
+    const parts = parseDateParts(item.str);
+    if (parts && sameCalendarDate(parts, target)) {
+      push({
+        x: item.x,
+        y: item.y,
+        width: item.width,
+        height: item.height,
+      });
     }
   }
 
-  return [rank(scored)[0].box];
+  for (let i = 0; i < textItems.length; i++) {
+    const window: PdfTextItem[] = [textItems[i]];
+    for (let j = i + 1; j < Math.min(i + 5, textItems.length); j++) {
+      if (!sameLine(textItems[i], textItems[j])) break;
+      window.push(textItems[j]);
+      const joined = window.map((t) => t.str).join('');
+      const spaced = window.map((t) => t.str).join(' ');
+      const parts =
+        parseDateParts(joined) ?? parseDateParts(spaced);
+      if (parts && sameCalendarDate(parts, target)) {
+        push(mergeBoxes(window));
+        break;
+      }
+    }
+  }
+
+  if (hits.length === 0) return [];
+
+  // If AI bbox overlaps / is near a hit, keep that detected position.
+  if (opts?.near) {
+    const nearY = boxCenterY(opts.near);
+    const band = Math.max(opts.near.height, 0.02) * 4;
+    const nearHits = hits.filter(
+      (h) => Math.abs(boxCenterY(h.box) - nearY) <= band,
+    );
+    if (nearHits.length > 0) {
+      nearHits.sort((a, b) => a.dist - b.dist || a.area - b.area);
+      return [nearHits[0].box];
+    }
+  }
+
+  const fromAnchor = findAnchorY(textItems, opts?.anchorHints);
+  if (fromAnchor != null) {
+    const band = 0.04;
+    const onLabel = hits.filter(
+      (h) => Math.abs(boxCenterY(h.box) - fromAnchor) <= band,
+    );
+    if (onLabel.length > 0) {
+      onLabel.sort((a, b) => a.dist - b.dist || a.area - b.area);
+      return [onLabel[0].box];
+    }
+  }
+
+  hits.sort((a, b) => a.dist - b.dist || a.area - b.area);
+  return [hits[0].box];
 }
 
 /** Resolve highlight / popup anchor for a selection on a page. */
@@ -619,6 +734,16 @@ function resolveHighlightBoxes(
   const rawValue = (highlight.value ?? '').trim();
   const role = highlight.role ?? 'other';
   const preferRight = role === 'quantity' || role === 'price';
+
+  // Dates: normalize in storage (ISO) but locate the printed form on the PDF.
+  const dateParts = parseDateParts(rawValue);
+  if (dateParts) {
+    const dateBoxes = findDateValueBoxes(textItems, dateParts, {
+      near: highlight.boundingBox,
+      anchorHints: highlight.anchorHints,
+    });
+    if (dateBoxes.length > 0) return dateBoxes;
+  }
 
   // Numeric fields (stocktaking qty, prices, …): find the value on *this*
   // line's row, preferring the qty column ("10 PK") — not Pos / item code.

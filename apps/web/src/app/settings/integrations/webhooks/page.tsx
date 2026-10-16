@@ -396,9 +396,11 @@ export default function WebhooksSettingsPage() {
           <Webhook className="mt-0.5 h-4 w-4 shrink-0" />
           <p>
             Key events: <code>document.extracted</code>,{' '}
+            <code>document.validating</code>,{' '}
             <code>document.ready_for_review</code>,{' '}
-            <code>document.approved</code>, <code>document.rejected</code>.
-            Payload includes <code>extraction</code> and <code>editorUrl</code>.
+            <code>document.in_review</code>, <code>document.approved</code>,{' '}
+            <code>document.rejected</code>. Payload includes{' '}
+            <code>extraction</code> and <code>editorUrl</code>.
           </p>
         </div>
       </div>

@@ -3,6 +3,7 @@ import { DocumentStatus } from '../../common/enums';
 /** Events other projects can listen for. */
 export type HandoffEventType =
   | 'document.extracted'
+  | 'document.validating'
   | 'document.ready_for_review'
   | 'document.in_review'
   | 'document.approved'

@@ -1,125 +1,116 @@
-# HTVeriDoc — Customer & organization integration guide
+# HTVeriDoc — Customer integration guide
 
-How to use HTVeriDoc for PDF parsing and how to connect your own system (ERP, TotalCtrl, socket, custom app).
+How to connect **your product** to HTVeriDoc for PDF parse / review.
 
-**In-app:** Settings → **Integration guide** (tabbed)
-
-| Tab | Audience | Purpose |
-|-----|----------|---------|
-| Getting started | Everyone | What the product does |
-| Parse documents | Org users | Upload → extract → review → approve |
-| Fields & columns | Admins | Field Manager + roles |
-| Notify your system | Admins / integrators | Webhooks |
-| Backend integration | Partner BE team | Server-to-server pattern (not FE) |
-| API reference | Partner BE team | Methods, headers, bodies, responses |
-| Test & FAQ | Everyone | Checklist + common issues |
-
----
-
-## What HTVeriDoc does
-
-HTVeriDoc is a **SaaS document parsing** product:
-
-1. Upload a purchase order confirmation / invoice PDF  
-2. AI extracts header + line items  
-3. Humans review and correct if needed  
-4. Approve when data is correct  
-5. Your system is notified via **webhook** (status + extraction payload)
-
-HTVeriDoc focuses on **accurate parsing and review**. Your system continues the business workflow after approve.
-
----
-
-## Parse documents (no code)
-
-| Step | Where | Action |
-|------|--------|--------|
-| 1 | Documents | Upload PDF |
-| 2 | Document page | Extract |
-| 3 | Review | Check fields & line items; edit if needed |
-| 4 | Approve | Confirm data is correct |
-| 5 | Settings → Webhooks | (Admin) Configure receiver URL so your other system gets events |
-
-Optional: **Copy editor link** to share the review screen with someone else.
-
----
-
-## Fields & columns
-
-- Settings → **Field Manager** — enable header fields and line-item columns for your org  
-- **Users & Roles** — invite reviewers; give admins field / integration permissions  
-
----
-
-## For integrators (other systems)
-
-**Important:** Integration is **backend ↔ HTVeriDoc**. Do not call HTVeriDoc from the partner frontend (no FE `htveridoc-tester` routes). See `docs/partner-be-integration.md`.
-
-### High-level flow
+**One path (mandatory):**
 
 ```text
-Partner FE → Partner BE → HTVeriDoc API (upload / extract / approve)
-                              ↓
-Partner BE ← HTVeriDoc webhook (status + extraction)
-Partner FE reads status from Partner BE only
+Your FE  →  Your BE only
+Your BE  →  HTVeriDoc API   (login, upload, process, editor-link, approve)
+HTVeriDoc →  Your BE webhook (status + extraction)
+Your FE  ←  Your BE only    (status, iframe url — never call HTVeriDoc from the browser)
 ```
 
-### 1. Configure webhook (once per org)
+| Layer | Does | Does **not** |
+|-------|------|----------------|
+| **Your FE** | Upload/status via your API; embed editor `url` from your BE in an iframe | Call HTVeriDoc; invent `/editor/...` URLs; store HTVeriDoc passwords |
+| **Your BE** | JWT login to HTVeriDoc; upload/process/approve; return `{ url, expiresAt }` to FE; verify webhooks | Expose HTVeriDoc credentials or JWT to the browser |
+| **HTVeriDoc** | Parse PDF, review UI, issue editor links, POST webhooks | Create store-orders / “create-order” in your ERP |
 
-Settings → Webhooks:
+**Approve → webhooks only.** HTVeriDoc does not push store-orders. Your system continues its own workflow after `document.approved`.
 
-- Receiver URL = your endpoint  
-- Signing secret (optional)  
-- Save → Test  
+---
 
-### 2. Events you will receive
+## What you copy from HTVeriDoc (partner BE `.env`)
+
+In-app: **Configuration → API credentials**
+
+| Variable | Purpose |
+|----------|---------|
+| `HTVERIDOC_API_URL` | Public API base (no `/api/v1`) |
+| `HTVERIDOC_EMAIL` / `HTVERIDOC_PASSWORD` | Integration user (JWT login) |
+| `HTVERIDOC_ORGANIZATION_ID` | Org context (optional if user has one org) |
+| `HTVERIDOC_WEBHOOK_SECRET` | Verify `X-HTVeriDoc-Signature` |
+
+**Do not** put HTVeriDoc “web origin” in partner env. Editor iframe URLs are returned ready-made by `POST /integrations/handoff/editor-link` as `{ url }`.
+
+Also configure **Settings → Webhooks**: your receiver URL → Save → Test (HTTP 2xx).
+
+---
+
+## Happy path (BE)
+
+1. `POST {HTVERIDOC_API_URL}/auth/login` → cache `accessToken` server-side  
+2. `POST /documents` (multipart `file`)  
+3. `POST /documents/:id/process`  
+4. Poll `GET /documents/:id` (and extraction if needed)  
+5. When ready for review: `POST /integrations/handoff/editor-link` → return `{ url, expiresAt }` to FE  
+6. FE: `<iframe src={url} />` (refresh link ~5–15 min before `expiresAt`)  
+7. `POST /documents/:id/approve` (from your BE or HTVeriDoc UI)  
+8. Receive webhook `document.approved` with `extraction.fields` / `extraction.lineItems`
+
+Auth on outbound calls: `Authorization: Bearer <accessToken>`
+
+---
+
+## Happy path (FE)
+
+Call **only your** APIs, for example:
+
+- Create job / upload  
+- Poll job status  
+- Get editor link → set iframe `src`  
+- Approve (optional) → your BE calls HTVeriDoc  
+
+No browser routes like `admin/htveridoc-tester/*`. No HTVeriDoc host in FE env.
+
+---
+
+## Webhook events (inbound to your BE)
 
 | Event | Meaning |
 |-------|---------|
 | `document.extracted` | Parsing finished |
+| `document.validating` | Validation running (in validate) |
 | `document.ready_for_review` | Ready for human review |
-| `document.in_review` | Review opened |
-| `document.approved` | Data confirmed — use `extraction` payload |
+| `document.in_review` | Review started / reopened (in review) |
+| `document.approved` | Use `extraction` payload |
 | `document.rejected` | Rejected |
 | `document.extraction_failed` | Parse failed |
+| `document.validation_failed` | Hard validation failure |
 | `webhook.test` | Manual test from settings |
 
-### 3. Webhook delivery
-
-- `POST` JSON to your URL  
-- Headers: `X-HTVeriDoc-Event`, `X-HTVeriDoc-Signature` (HMAC-SHA256), `X-HTVeriDoc-Delivery`  
-- On `document.approved`, read `extraction.fields` and `extraction.lineItems`
-
-### 4. API sequence (JWT)
-
-1. `POST /auth/login`  
-2. `POST /documents` (multipart `file`)  
-3. `POST /documents/:id/process`  
-4. `GET /documents/:id` / `GET /documents/:id/extraction` (poll)  
-5. `POST /integrations/handoff/editor-link` (optional)  
-6. `POST /documents/:id/approve`  
-
-Auth: `Authorization: Bearer <accessToken>`
+Headers: `X-HTVeriDoc-Event`, `X-HTVeriDoc-Signature` (HMAC-SHA256 of raw body), `X-HTVeriDoc-Delivery`.
 
 ---
 
-## Testing checklist & FAQ
+## Org users (no code)
 
-1. webhook.site as Receiver URL → Test → see `webhook.test`  
-2. Upload → Extract → Approve → see `document.approved`  
-3. Copy editor link → open in private window  
-4. Point Receiver URL at your real system → Test returns 2xx  
+| Step | Where |
+|------|--------|
+| Upload / extract / review / approve | Documents |
+| Field modes & columns | Settings → Field Manager |
+| Invite reviewers / roles | Users & Roles |
+| Partner connection | API credentials + Webhooks |
 
-**404 on Test:** HTVeriDoc is fine — create the receiver route first.  
-**No event after Approve:** check saved webhook URL and that the API host can reach it.  
-**Missing columns:** check Field Manager for this org.
+---
+
+## Test checklist
+
+1. Webhooks → Test → `webhook.test` HTTP 2xx  
+2. BE: login → upload → process → status → READY_FOR_REVIEW  
+3. FE: editor iframe loads from **your BE** `url` only  
+4. Approve → `document.approved` with line items  
+5. Browser network: no HTVeriDoc API host for control-plane calls  
 
 ---
 
 ## Related docs
 
-- **API reference (headers / body / response):** `docs/partner-api-reference.md`  
-- BE architecture: `docs/partner-be-integration.md`  
-- Webhooks detail: `docs/handoff-webhooks-editor.md`  
-- In-app: Guides → Integration guide → **API reference**  
-
+| Doc | Use when |
+|-----|----------|
+| [`partner-be-integration.md`](./partner-be-integration.md) | Architecture + BE checklist |
+| [`partner-api-reference.md`](./partner-api-reference.md) | Exact HTTP headers / bodies |
+| [`partner-tester-prompts.md`](./partner-tester-prompts.md) | Copy-paste FE/BE Cursor prompts |
+| [`handoff-webhooks-editor.md`](./handoff-webhooks-editor.md) | Webhook + editor link detail |
+| In-app **Integration guide** | Same content for org admins |

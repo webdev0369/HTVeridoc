@@ -17,6 +17,7 @@ import { WebhookEndpointService } from './webhook-endpoint.service';
 
 const STATUS_TO_EVENT: Partial<Record<DocumentStatus, HandoffEventType>> = {
   [DocumentStatus.EXTRACTED]: 'document.extracted',
+  [DocumentStatus.VALIDATING]: 'document.validating',
   [DocumentStatus.READY_FOR_REVIEW]: 'document.ready_for_review',
   [DocumentStatus.IN_REVIEW]: 'document.in_review',
   [DocumentStatus.APPROVED]: 'document.approved',

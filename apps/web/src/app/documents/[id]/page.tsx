@@ -30,6 +30,7 @@ import {
   columnMapParseMode,
   type ColumnMapAssignment,
 } from '@/lib/column-map';
+import { isDateFieldKey, normalizeDateInput } from '@/lib/date-format';
 import {
   buildReviewQueue,
   nextReviewSelection,
@@ -611,8 +612,7 @@ export default function DocumentDetailPage() {
       tone: selection.tone,
       label: selection.label,
       value: selection.value,
-      anchorHints:
-        selection.type === 'line' ? selection.anchorHints : undefined,
+      anchorHints: selection.anchorHints,
       role:
         selection.type === 'line'
           ? highlightRoleForColumn(selection.column)
@@ -690,21 +690,37 @@ export default function DocumentDetailPage() {
     });
   };
 
+  const normalizeFieldValue = (
+    selection: Exclude<ReviewSelection, null>,
+    raw: string | null,
+  ): string | null => {
+    if (raw == null) return null;
+    if (
+      selection.type === 'field' &&
+      isDateFieldKey(selection.fieldKey)
+    ) {
+      return normalizeDateInput(raw);
+    }
+    return raw;
+  };
+
   const handlePdfValuePick = async (
     value: string,
     box?: { x: number; y: number; width: number; height: number },
   ) => {
     if (!selection || !canEdit || !value.trim()) return;
     if (selection.type === 'field') {
+      const currentValue = normalizeFieldValue(selection, value.trim());
       await saveFieldMutation.mutateAsync({
         fieldId: selection.id,
-        currentValue: value.trim(),
+        currentValue,
       });
       setSelection({
         ...selection,
-        value: value.trim(),
+        value: currentValue,
         tone: 'edited',
         page: pdfPage,
+        // Keep the click/detect box so the float stays on the printed date.
         boundingBox: box ?? selection.boundingBox,
       });
       return;
@@ -741,9 +757,10 @@ export default function DocumentDetailPage() {
     const current = selection;
 
     if (current.type === 'field') {
+      const currentValue = normalizeFieldValue(current, next);
       await saveFieldMutation.mutateAsync({
         fieldId: current.id,
-        currentValue: next,
+        currentValue,
       });
     } else {
       await saveLineMutation.mutateAsync({
@@ -990,7 +1007,17 @@ export default function DocumentDetailPage() {
               saving={saveFieldMutation.isPending}
               footer={reviewFooter}
               onSaveField={async (fieldId, currentValue) => {
-                await saveFieldMutation.mutateAsync({ fieldId, currentValue });
+                const field = extractionQuery.data?.fields?.find(
+                  (f) => f.id === fieldId,
+                );
+                const normalized =
+                  field && isDateFieldKey(field.fieldKey)
+                    ? normalizeDateInput(currentValue)
+                    : currentValue;
+                await saveFieldMutation.mutateAsync({
+                  fieldId,
+                  currentValue: normalized,
+                });
               }}
             />
           ) : showProcessingPanel ? (

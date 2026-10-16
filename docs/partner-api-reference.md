@@ -3,7 +3,9 @@
 Professional HTTP contract for **partner backends** integrating with HTVeriDoc.
 
 > **Audience:** Partner BE / TotalCtrl / socket / ERP teams  
-> **Not for browsers:** Do not call these APIs from the partner frontend. See `docs/partner-be-integration.md`.
+> **Not for browsers:** Do not call these APIs from the partner frontend.  
+> **Architecture:** FE → partner BE → HTVeriDoc API; HTVeriDoc → partner BE webhooks.  
+> Overview: [`customer-integration-guide.md`](./customer-integration-guide.md) · BE checklist: [`partner-be-integration.md`](./partner-be-integration.md)
 
 ---
 
@@ -464,8 +466,9 @@ const ok = crypto.timingSafeEqual(
 | Event | When |
 |-------|------|
 | `document.extracted` | Parsing finished |
+| `document.validating` | Validation running (in validate) |
 | `document.ready_for_review` | Ready for human review |
-| `document.in_review` | Review started / reopened |
+| `document.in_review` | Review started / reopened (in review) |
 | `document.approved` | **Main handoff** — use `extraction` |
 | `document.rejected` | Rejected |
 | `document.extraction_failed` | Parse failed |

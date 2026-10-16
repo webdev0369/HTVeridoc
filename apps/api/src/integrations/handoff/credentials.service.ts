@@ -60,6 +60,7 @@ export class CredentialsService {
 
     const partnerEnvTemplate = [
       `# HTVeriDoc — partner backend env (server only, never put in FE)`,
+      `# Editor iframe URLs come from POST /integrations/handoff/editor-link — do not set a web origin.`,
       `HTVERIDOC_API_URL=${apiBaseUrl}`,
       `HTVERIDOC_EMAIL=<integration-user@your-company.com>`,
       `HTVERIDOC_PASSWORD=<password>`,

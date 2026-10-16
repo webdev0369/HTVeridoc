@@ -59,6 +59,7 @@ HTVERIDOC_PASSWORD=<password>
 HTVERIDOC_WEBHOOK_SECRET=<signing secret from HTVeriDoc Settings → Webhooks>
 # Optional if multi-org login needed:
 # HTVERIDOC_ORGANIZATION_ID=<uuid>
+# Do NOT set a HTVeriDoc "web origin" — editor iframe URLs come from editor-link as { url }.
 
 ## A) HTVeriDoc HTTP client (internal service)
 

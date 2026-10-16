@@ -198,6 +198,7 @@ export default function IntegrationCredentialsPage() {
   const envBlock = data
     ? [
         `# HTVeriDoc — partner backend only (never commit / never put in FE)`,
+        `# Editor URLs: use { url } from POST /integrations/handoff/editor-link (no web origin env)`,
         `HTVERIDOC_API_URL=${data.apiBaseUrl}`,
         `HTVERIDOC_EMAIL=${data.auth.currentUserEmail}`,
         `HTVERIDOC_PASSWORD=<password>`,
@@ -323,11 +324,6 @@ export default function IntegrationCredentialsPage() {
                     label="API base URL"
                     value={data.apiBaseUrl}
                     hint="HTVERIDOC_API_URL — no /api/v1 prefix"
-                  />
-                  <CopyRow
-                    label="Web origin"
-                    value={data.webOrigin}
-                    hint="Used for editor iframe / editor links"
                   />
                 </CardContent>
               </Card>

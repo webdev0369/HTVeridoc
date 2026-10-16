@@ -7,6 +7,9 @@ builder = "DOCKERFILE"
 dockerfilePath = "apps/api/Dockerfile"
 
 [deploy]
+# Must not use pnpm: the runner image has no package manager (node only).
+# Also clears any Railway UI / Nixpacks start command that would override the image ENTRYPOINT.
+startCommand = "/entrypoint.sh"
 healthcheckPath = "/health"
 healthcheckTimeout = 40
 restartPolicyType = "ON_FAILURE"

@@ -8,7 +8,10 @@ import type {
   ValidationDto,
   ValidationErrorDto,
 } from '@/lib/types';
-import type { ReviewSelection } from '@/lib/review-types';
+import {
+  dateFieldAnchorHints,
+  type ReviewSelection,
+} from '@/lib/review-types';
 import type { HighlightTone } from '@/components/pdf-viewer';
 import {
   ProcessingLog,
@@ -139,10 +142,12 @@ export function ReviewEditor({
     onSelect({
       type: 'field',
       id: field.id,
+      fieldKey: field.fieldKey,
       label: field.fieldLabel,
       value: field.currentValue,
       page: field.source?.page ?? null,
       boundingBox: field.source?.boundingBox,
+      anchorHints: dateFieldAnchorHints(field.fieldKey),
       tone: toneFor(field.isUserEdited, issueByField.has(field.fieldKey)),
     });
   };

@@ -14,8 +14,9 @@ Similar to Rossum: Rossum sends **document status changed** to your URL; HTVeriD
 | HTVeriDoc event | Document status | When it fires |
 |-----------------|-----------------|---------------|
 | `document.extracted` | `EXTRACTED` | Gemini extraction finished |
+| `document.validating` | `VALIDATING` | Validation running (in validate) |
 | `document.ready_for_review` | `READY_FOR_REVIEW` | Validation done; ready for human review |
-| `document.in_review` | `IN_REVIEW` | Review started or reopened |
+| `document.in_review` | `IN_REVIEW` | Review started or reopened (in review) |
 | `document.approved` | `APPROVED` | User confirmed data is correct (**main handoff**) |
 | `document.rejected` | `REJECTED` | User rejected |
 | `document.extraction_failed` | `EXTRACTION_FAILED` | Extraction error |

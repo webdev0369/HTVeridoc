@@ -66,7 +66,7 @@ Main event: `document.approved` (+ `extraction.fields`, `extraction.lineItems`)
 
 ### D) In-app for orgs
 
-- **Configuration → API credentials** — org ID, API base URL, generate/rotate webhook signing secret (shown once), copy `.env` template for partner BE  
+- **Configuration → API credentials** — org ID, API base URL, login example, generate/rotate webhook signing secret (shown once), copy `.env` template for partner BE (no web origin — editor URLs come from editor-link `{ url }`)  
 - **Configuration → Webhooks** — receiver URL + Test  
 - **Guides → Integration guide** — Backend integration + API reference
 
