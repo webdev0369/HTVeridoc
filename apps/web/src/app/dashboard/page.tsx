@@ -9,6 +9,7 @@ import {
   Cable,
   FileUp,
   KeyRound,
+  Inbox,
   ListOrdered,
   Settings2,
   Users,
@@ -295,22 +296,40 @@ export default function DashboardPage() {
               </>
             ) : null}
             {canReadQueue ? (
-              <Link href="/settings/queue" className="block">
-                <Card className="transition hover:border-primary/40">
-                  <CardHeader>
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
-                      <ListOrdered className="h-4 w-4" aria-hidden />
-                    </div>
-                    <CardDescription className="pt-2">
-                      Administration
-                    </CardDescription>
-                    <CardTitle className="text-base">Queue</CardTitle>
-                    <CardDescription>
-                      Inspect and retry failed extraction jobs.
-                    </CardDescription>
-                  </CardHeader>
-                </Card>
-              </Link>
+              <>
+                <Link href="/settings/queues" className="block">
+                  <Card className="transition hover:border-primary/40">
+                    <CardHeader>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
+                        <Inbox className="h-4 w-4" aria-hidden />
+                      </div>
+                      <CardDescription className="pt-2">
+                        Configuration
+                      </CardDescription>
+                      <CardTitle className="text-base">Queue Manager</CardTitle>
+                      <CardDescription>
+                        Create document queues, types, and member access.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                </Link>
+                <Link href="/settings/jobs" className="block">
+                  <Card className="transition hover:border-primary/40">
+                    <CardHeader>
+                      <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-muted text-foreground">
+                        <ListOrdered className="h-4 w-4" aria-hidden />
+                      </div>
+                      <CardDescription className="pt-2">
+                        Administration
+                      </CardDescription>
+                      <CardTitle className="text-base">Background Jobs</CardTitle>
+                      <CardDescription>
+                        Inspect and retry failed extraction / export jobs.
+                      </CardDescription>
+                    </CardHeader>
+                  </Card>
+                </Link>
+              </>
             ) : null}
           </div>
         </div>

@@ -170,6 +170,15 @@ export class ExtractionLineItem {
   })
   discount!: string | null;
 
+  /** VAT / GST / MVA rate (%) or amount when printed on the line. */
+  @Column({
+    type: 'numeric',
+    precision: 18,
+    scale: 6,
+    nullable: true,
+  })
+  vat!: string | null;
+
   @Column({
     type: 'numeric',
     precision: 18,

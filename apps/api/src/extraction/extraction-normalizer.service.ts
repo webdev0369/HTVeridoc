@@ -225,6 +225,7 @@ export class ExtractionNormalizerService {
           stocktakingUnitPrice:
             prior?.stocktakingUnitPrice ?? this.num(item.stocktakingUnitPrice),
           discount: prior?.discount ?? this.num(item.discount),
+          vat: prior?.vat ?? this.num(item.vat),
           amount: prior?.amount ?? this.num(item.amount),
           expectedDelivery:
             prior?.expectedDelivery ?? item.expectedDelivery ?? null,

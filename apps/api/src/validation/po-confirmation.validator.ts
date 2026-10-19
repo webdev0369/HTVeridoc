@@ -177,6 +177,7 @@ export function validatePoConfirmation(input: {
       num(line.purchaseQuantity) ?? num(line.quantity);
     const unitPrice = num(line.unitPrice);
     const discount = num(line.discount);
+    const vat = num(line.vat);
     const amount = num(line.amount);
     const isProduct = line.lineType === 'PRODUCT' || line.lineType === 'UNKNOWN';
     const isCancelled = line.lineType === 'CANCELLED';
@@ -239,6 +240,26 @@ export function validatePoConfirmation(input: {
       }
     }
 
+    if (vat != null) {
+      if (vat < 0) {
+        issues.push({
+          severity: 'error',
+          code: 'LINE_VAT_NEGATIVE',
+          message: `${label}: VAT must be >= 0`,
+          lineItemId: line.id,
+          meta: { vat },
+        });
+      } else if (vat > 100) {
+        issues.push({
+          severity: 'warning',
+          code: 'LINE_VAT_HIGH',
+          message: `${label}: VAT ${vat} looks above 100% — verify if absolute amount`,
+          lineItemId: line.id,
+          meta: { vat },
+        });
+      }
+    }
+
     if (amount != null && amount < 0 && !isCancelled) {
       issues.push({
         severity: 'error',
@@ -256,20 +277,66 @@ export function validatePoConfirmation(input: {
       !isCancelled &&
       line.lineType !== 'NOTE'
     ) {
-      let expected = quantity * unitPrice;
-      if (discount != null && discount >= 0 && discount <= 100) {
-        expected = expected * (1 - discount / 100);
+      // Net = qty × price (− discount% when present).
+      let net = quantity * unitPrice;
+      const discountApplied =
+        discount != null && discount >= 0 && discount <= 100;
+      if (discountApplied) {
+        net = net * (1 - discount! / 100);
       }
-      const delta = Math.abs(expected - amount);
-      if (delta > AMOUNT_TOLERANCE) {
+
+      // Candidates the printed total may match:
+      // - no VAT / ex-VAT total → net
+      // - VAT as absolute mva (e.g. 414) → net + vat
+      // - VAT as percent (e.g. 15) → net × (1 + vat/100)
+      const candidates: { expected: number; via: string }[] = [
+        { expected: net, via: 'qty×price' },
+      ];
+      if (vat != null && vat >= 0) {
+        candidates.push({
+          expected: net + vat,
+          via: 'qty×price+VAT',
+        });
+        if (vat <= 100) {
+          candidates.push({
+            expected: net * (1 + vat / 100),
+            via: 'qty×price×(1+VAT%)',
+          });
+        }
+      }
+
+      let best = candidates[0];
+      let bestDelta = Math.abs(best.expected - amount);
+      for (let i = 1; i < candidates.length; i++) {
+        const d = Math.abs(candidates[i].expected - amount);
+        if (d < bestDelta) {
+          best = candidates[i];
+          bestDelta = d;
+        }
+      }
+
+      if (bestDelta > AMOUNT_TOLERANCE) {
+        const discountNote = discountApplied ? ' (−discount%)' : '';
+        const vatNote =
+          vat != null && vat >= 0
+            ? ' (tried with/without VAT)'
+            : '';
         issues.push({
           severity: 'error',
           code: 'LINE_AMOUNT_MISMATCH',
-          message: `${label}: amount ${amount} does not match qty×price${
-            discount != null && discount <= 100 ? ' (−discount%)' : ''
-          } ≈ ${expected.toFixed(2)}`,
+          message: `${label}: amount ${amount} does not match ${best.via}${discountNote}${vatNote} ≈ ${best.expected.toFixed(2)}`,
           lineItemId: line.id,
-          meta: { quantity, unitPrice, discount, amount, expected, delta },
+          meta: {
+            quantity,
+            unitPrice,
+            discount,
+            vat,
+            amount,
+            expected: best.expected,
+            via: best.via,
+            delta: bestDelta,
+            candidates: candidates.map((c) => c.expected),
+          },
         });
       }
     }

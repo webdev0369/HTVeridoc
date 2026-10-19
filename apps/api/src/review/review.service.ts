@@ -231,17 +231,16 @@ export class ReviewService {
     field.isUserEdited = true;
     await this.fieldsRepo.save(field);
 
-    // Remember correction for future documents of this type
-    await this.fieldCorrectionService.remember({
+    // Bookkeeping off the critical path — UI already advanced optimistically.
+    void this.fieldCorrectionService.remember({
       organizationId,
       documentType: document.documentType,
       fieldKey: field.fieldKey,
       fromValue: fromForMemory,
       toValue: field.currentValue,
     });
-
-    await this.ensureInReview(document, organizationId);
-    await this.processingLog.log(
+    void this.ensureInReview(document, organizationId);
+    void this.processingLog.log(
       documentId,
       organizationId,
       'FIELD_EDITED',
@@ -256,7 +255,8 @@ export class ReviewService {
       },
     );
 
-    return this.extractionService.getByDocument(organizationId, documentId);
+    // Tiny ack — do not reload full extraction on every cell ✓.
+    return { ok: true as const };
   }
 
   async createLineItem(
@@ -300,6 +300,7 @@ export class ReviewService {
       unitPrice: dto.unitPrice ?? null,
       stocktakingUnitPrice: dto.stocktakingUnitPrice ?? null,
       discount: dto.discount ?? null,
+      vat: dto.vat ?? null,
       amount: dto.amount ?? null,
       expectedDelivery: null,
       lineType: dto.lineType ?? 'PRODUCT',
@@ -327,7 +328,9 @@ export class ReviewService {
       { meta: { lineItemId: line.id } },
     );
 
-    return this.extractionService.getByDocument(organizationId, documentId);
+    return this.extractionService.getByDocument(organizationId, documentId, {
+      light: true,
+    });
   }
 
   async updateLineItem(
@@ -388,22 +391,35 @@ export class ReviewService {
     assignString('unitPrice', dto.unitPrice);
     assignString('stocktakingUnitPrice', dto.stocktakingUnitPrice);
     assignString('discount', dto.discount);
+    assignString('vat', dto.vat);
     assignString('amount', dto.amount);
     assignString('expectedDelivery', dto.expectedDelivery);
     if (dto.lineType !== undefined && dto.lineType !== null) {
       line.lineType = dto.lineType;
     }
 
-    await this.applyDerivedUnitFields(
-      organizationId,
-      document.documentType,
-      line,
-    );
+    // Only re-derive units when qty/packaging/base fields change — not on
+    // every cell ✓ (purchase unit "KG" was waiting on this + full reload).
+    if (this.dtoNeedsUnitDerivation(dto)) {
+      await this.applyDerivedUnitFields(
+        organizationId,
+        document.documentType,
+        line,
+      );
+    } else if (
+      dto.purchaseQuantity !== undefined ||
+      (dto.quantity !== undefined && dto.purchaseQuantity === undefined)
+    ) {
+      if (line.purchaseQuantity != null && line.purchaseQuantity !== '') {
+        line.quantity = line.purchaseQuantity;
+      }
+    }
     line.isUserEdited = true;
     await this.lineItemsRepo.save(line);
 
-    await this.ensureInReview(document, organizationId);
-    await this.processingLog.log(
+    // Non-blocking bookkeeping — UI already advanced optimistically.
+    void this.ensureInReview(document, organizationId);
+    void this.processingLog.log(
       documentId,
       organizationId,
       'LINE_EDITED',
@@ -411,7 +427,24 @@ export class ReviewService {
       { meta: { lineItemId: line.id } },
     );
 
-    return this.extractionService.getByDocument(organizationId, documentId);
+    // Tiny ack — skip full extraction reload (was the remaining ✓ delay).
+    return { ok: true as const };
+  }
+
+  /** True when PATCH touches fields that feed packaging / unit derivation. */
+  private dtoNeedsUnitDerivation(dto: UpdateLineItemDto): boolean {
+    return (
+      dto.packaging !== undefined ||
+      dto.packageQuantity !== undefined ||
+      dto.purchaseQuantity !== undefined ||
+      dto.stockTakingQuantity !== undefined ||
+      dto.stockTakingQuantityPerPurchaseUnit !== undefined ||
+      dto.baseMeasurementUnit !== undefined ||
+      dto.baseContentQuantity !== undefined ||
+      dto.pricePerBaseUnit !== undefined ||
+      dto.stockTakingQuantityPerBaseMeasurementUnit !== undefined ||
+      dto.quantity !== undefined
+    );
   }
 
   async bulkUpdateLineColumn(
@@ -457,7 +490,9 @@ export class ReviewService {
       { meta: { column: dto.column, updated } },
     );
 
-    return this.extractionService.getByDocument(organizationId, documentId);
+    return this.extractionService.getByDocument(organizationId, documentId, {
+      light: true,
+    });
   }
 
   private async applyDerivedUnitFields(
@@ -580,6 +615,9 @@ export class ReviewService {
       case 'discount':
         line.discount = asNumString();
         break;
+      case 'vat':
+        line.vat = asNumString();
+        break;
       case 'amount':
         line.amount = asNumString();
         break;
@@ -617,7 +655,9 @@ export class ReviewService {
       ),
     ]);
 
-    return this.extractionService.getByDocument(organizationId, documentId);
+    return this.extractionService.getByDocument(organizationId, documentId, {
+      light: true,
+    });
   }
 
   private assertEditable(status: DocumentStatus) {
@@ -642,6 +682,11 @@ export class ReviewService {
         'REVIEW_STARTED',
         'Review started on first edit',
         { level: 'info' },
+      );
+      this.handoff.notifyStatus(
+        organizationId,
+        document.id,
+        DocumentStatus.IN_REVIEW,
       );
     }
   }

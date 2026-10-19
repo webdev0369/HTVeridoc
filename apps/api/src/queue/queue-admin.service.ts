@@ -14,6 +14,12 @@ import { QUEUE_ENABLED } from './redis-compat';
 
 export type QueueName = 'ai-extraction' | 'document-export';
 
+export interface QueueJobAttemptDto {
+  attempt: number;
+  status: 'failed' | 'succeeded' | 'running' | 'pending';
+  error: string | null;
+}
+
 export interface QueueJobDto {
   id: string;
   name: string;
@@ -23,6 +29,11 @@ export interface QueueJobDto {
   state: string;
   failedReason: string | null;
   attemptsMade: number;
+  attemptsMax: number;
+  /** Human summary, e.g. "3 attempts: 2 failed, then succeeded". */
+  attemptsSummary: string;
+  /** Per-attempt timeline reconstructed from BullMQ stacktrace + final state. */
+  attempts: QueueJobAttemptDto[];
   timestamp: number | null;
   processedOn: number | null;
   finishedOn: number | null;
@@ -154,6 +165,17 @@ export class QueueAdminService {
       organizationId?: string;
     };
     const state = await job.getState();
+    const attemptsMax = Math.max(1, Number(job.opts?.attempts ?? 1));
+    const attemptsMade = Math.max(0, Number(job.attemptsMade ?? 0));
+    const stacktrace = Array.isArray(job.stacktrace) ? job.stacktrace : [];
+    const failedReason = job.failedReason?.trim() || null;
+    const attempts = this.buildAttempts(
+      state,
+      attemptsMade,
+      attemptsMax,
+      stacktrace,
+      failedReason,
+    );
     return {
       id: String(job.id),
       name: job.name,
@@ -161,11 +183,141 @@ export class QueueAdminService {
       documentId: data.documentId ?? null,
       organizationId: data.organizationId ?? null,
       state,
-      failedReason: job.failedReason ?? null,
-      attemptsMade: job.attemptsMade,
+      failedReason,
+      attemptsMade,
+      attemptsMax,
+      attemptsSummary: this.buildAttemptsSummary(state, attempts, attemptsMax),
+      attempts,
       timestamp: job.timestamp ?? null,
       processedOn: job.processedOn ?? null,
       finishedOn: job.finishedOn ?? null,
     };
+  }
+
+  /**
+   * BullMQ keeps one stacktrace entry per failed attempt and leaves
+   * `failedReason` set even after a later attempt succeeds. Reconstruct a
+   * simple timeline so ops can see "2 failed → 3rd succeeded".
+   */
+  private buildAttempts(
+    state: string,
+    attemptsMade: number,
+    attemptsMax: number,
+    stacktrace: string[],
+    failedReason: string | null,
+  ): QueueJobAttemptDto[] {
+    const errors = stacktrace.map((entry) => this.stacktraceMessage(entry));
+    // Prefer failedReason for the latest failure when present.
+    if (failedReason && errors.length > 0) {
+      errors[errors.length - 1] = failedReason;
+    } else if (failedReason && errors.length === 0 && state === 'failed') {
+      errors.push(failedReason);
+    }
+
+    const attempts: QueueJobAttemptDto[] = [];
+
+    if (state === 'completed') {
+      const failedCount = errors.length;
+      for (let i = 0; i < failedCount; i++) {
+        attempts.push({
+          attempt: i + 1,
+          status: 'failed',
+          error: errors[i] ?? null,
+        });
+      }
+      const successAttempt = Math.max(failedCount + 1, attemptsMade || 1);
+      attempts.push({
+        attempt: successAttempt,
+        status: 'succeeded',
+        error: null,
+      });
+      return attempts;
+    }
+
+    if (state === 'failed') {
+      const count = Math.max(errors.length, attemptsMade, 1);
+      for (let i = 0; i < count; i++) {
+        attempts.push({
+          attempt: i + 1,
+          status: 'failed',
+          error: errors[i] ?? (i === count - 1 ? failedReason : null),
+        });
+      }
+      return attempts;
+    }
+
+    if (state === 'active') {
+      for (let i = 0; i < errors.length; i++) {
+        attempts.push({
+          attempt: i + 1,
+          status: 'failed',
+          error: errors[i] ?? null,
+        });
+      }
+      attempts.push({
+        attempt: errors.length + 1,
+        status: 'running',
+        error: null,
+      });
+      return attempts;
+    }
+
+    // waiting / delayed / unknown
+    for (let i = 0; i < errors.length; i++) {
+      attempts.push({
+        attempt: i + 1,
+        status: 'failed',
+        error: errors[i] ?? null,
+      });
+    }
+    const next = Math.min(errors.length + 1, attemptsMax);
+    if (attempts.length === 0 || attempts[attempts.length - 1].attempt < next) {
+      attempts.push({
+        attempt: next,
+        status: 'pending',
+        error: null,
+      });
+    }
+    return attempts;
+  }
+
+  private buildAttemptsSummary(
+    state: string,
+    attempts: QueueJobAttemptDto[],
+    attemptsMax: number,
+  ): string {
+    const failed = attempts.filter((a) => a.status === 'failed').length;
+    const succeeded = attempts.some((a) => a.status === 'succeeded');
+    const running = attempts.some((a) => a.status === 'running');
+
+    if (state === 'completed' && succeeded) {
+      if (failed === 0) {
+        return `Succeeded on attempt 1 of ${attemptsMax}`;
+      }
+      return `${failed + 1} attempts: ${failed} failed, then succeeded`;
+    }
+    if (state === 'failed') {
+      return `Failed after ${Math.max(failed, 1)} of ${attemptsMax} attempts`;
+    }
+    if (running) {
+      return failed > 0
+        ? `Attempt ${failed + 1} of ${attemptsMax} running (${failed} failed earlier)`
+        : `Attempt 1 of ${attemptsMax} running`;
+    }
+    if (failed > 0) {
+      return `Waiting to retry (attempt ${failed + 1} of ${attemptsMax})`;
+    }
+    return `Up to ${attemptsMax} attempts`;
+  }
+
+  private stacktraceMessage(entry: string): string {
+    const first = entry.split('\n').map((l) => l.trim()).find(Boolean);
+    if (!first) return 'Attempt failed';
+    // "Error: message" or "ServiceUnavailableException: message"
+    const matched = first.match(/^[A-Za-z0-9_$]*Error:\s*(.+)$/);
+    if (matched?.[1]) return matched[1].trim();
+    const named = first.match(/^[A-Za-z0-9_$]+Exception:\s*(.+)$/);
+    if (named?.[1]) return named[1].trim();
+    return first.length > 240 ? `${first.slice(0, 237)}…` : first;
   }
 }

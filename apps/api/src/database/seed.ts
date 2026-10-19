@@ -11,8 +11,14 @@ const PERMISSIONS: { code: PermissionCode; description: string }[] = [
   { code: PermissionCode.DOCUMENT_APPROVE, description: 'Approve documents' },
   { code: PermissionCode.DOCUMENT_REJECT, description: 'Reject documents' },
   { code: PermissionCode.DOCUMENT_EXPORT, description: 'Export documents' },
-  { code: PermissionCode.QUEUE_READ, description: 'Read queues' },
-  { code: PermissionCode.QUEUE_MANAGE, description: 'Manage queues' },
+  {
+    code: PermissionCode.QUEUE_READ,
+    description: 'View document queues and background jobs',
+  },
+  {
+    code: PermissionCode.QUEUE_MANAGE,
+    description: 'Manage document queues and retry background jobs',
+  },
   { code: PermissionCode.FIELD_READ, description: 'Read fields' },
   { code: PermissionCode.FIELD_MANAGE, description: 'Manage fields' },
   { code: PermissionCode.USER_READ, description: 'Read users' },

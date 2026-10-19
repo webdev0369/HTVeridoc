@@ -228,7 +228,8 @@ export class AuthService {
   }
 
   async me(user: AuthUser) {
-    // Handoff editor JWTs use synthetic user ids (editor:<documentId>).
+    // Handoff editor JWTs use synthetic user ids (editor:<documentId>) —
+    // never query organization_users with that string (not a UUID).
     if (user.userId.startsWith('editor:')) {
       return {
         id: user.userId,

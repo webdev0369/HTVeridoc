@@ -7,6 +7,7 @@ import {
   BookOpen,
   Cable,
   FileText,
+  Inbox,
   KeyRound,
   LayoutDashboard,
   ListOrdered,
@@ -38,6 +39,7 @@ import {
 
 const workspaceNav = [
   { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { href: '/queues', label: 'Queues', icon: Inbox },
   { href: '/documents', label: 'Documents', icon: FileText },
 ];
 
@@ -161,14 +163,26 @@ function NavLinks({
               </>
             ) : null}
             {canReadQueue ? (
-              <Link
-                href="/settings/queue"
-                onClick={onNavigate}
-                className={linkClass(pathname.startsWith('/settings/queue'))}
-              >
-                <ListOrdered className="h-4 w-4" aria-hidden />
-                Queue
-              </Link>
+              <>
+                <Link
+                  href="/settings/queues"
+                  onClick={onNavigate}
+                  className={linkClass(
+                    pathname.startsWith('/settings/queues'),
+                  )}
+                >
+                  <Inbox className="h-4 w-4" aria-hidden />
+                  Queue Manager
+                </Link>
+                <Link
+                  href="/settings/jobs"
+                  onClick={onNavigate}
+                  className={linkClass(pathname.startsWith('/settings/jobs'))}
+                >
+                  <ListOrdered className="h-4 w-4" aria-hidden />
+                  Background Jobs
+                </Link>
+              </>
             ) : null}
           </nav>
         </div>
@@ -400,8 +414,13 @@ export function AppShell({
                     canReadQueue
                       ? [
                           {
-                            href: '/settings/queue',
-                            label: 'Queue',
+                            href: '/settings/queues',
+                            label: 'Queue Manager',
+                            icon: Inbox,
+                          },
+                          {
+                            href: '/settings/jobs',
+                            label: 'Jobs',
                             icon: ListOrdered,
                           },
                         ]

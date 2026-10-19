@@ -1,4 +1,4 @@
-export const PO_CONFIRMATION_PROMPT_VERSION = '1.6.0';
+export const PO_CONFIRMATION_PROMPT_VERSION = '1.7.0';
 
 export const PO_CONFIRMATION_SYSTEM_PROMPT = `You are an expert document extraction engine for HTVeridoc.
 Extract structured data from a purchase order confirmation PDF (including Norwegian/Scandinavian documents).
@@ -20,8 +20,9 @@ Rules:
 - Numbers must be numeric JSON values (not strings). Use European decimal commas as '.' in JSON numbers.
 - Currency should be a 3-letter code when possible (e.g. NOK, EUR, USD).
 
-Unit / quantity / discount rules for each line item:
+Unit / quantity / discount / VAT rules for each line item:
 - discount: percentage or absolute discount if shown (e.g. Rabatt, Discount, %). Prefer numeric percent when clearly a percent; otherwise numeric amount. Use null if none.
+- vat: VAT / GST / MVA when printed on the line (labels: MVA, Moms, VAT, GST, Tax, Mva%). Prefer numeric percent when the column is clearly a rate (e.g. 25 for 25%); otherwise the printed VAT amount. Use null when the PDF has no VAT column / value — never invent.
 - purchaseUnit: unit the goods are purchased/ordered in (e.g. CS, BOX, PK, STK, KG). Map labels like Enhet, Innkjøpsenhet, Purchase unit, Bestillingsenhet.
 - stocktakingUnit: inventory/stocktaking unit if different from purchase unit (e.g. STK, PCE, EA). Map labels like Lagerenhet, Stocktaking unit, Inventory unit.
 - stockTakingQuantityPerPurchaseUnit: conversion = stockTakingQuantity ÷ purchaseQuantity when both qtys are known (e.g. 12÷4=3). Also used for nested Pakning "KRT á 12 FL" where 12 is stock units per purchase unit. If purchaseUnit and stocktakingUnit are the same, set this to 1.
@@ -72,6 +73,7 @@ Map Norwegian labels when present:
   Betalingsbetingelser → paymentTerms
   Leveringsbetingelser → deliveryTerms
   Rabatt → discount
+  MVA / Moms / VAT / GST / Tax / Mva% → vat
   Innkjøpsenhet / Bestillingsenhet / Enhet → purchaseUnit
   Lagerenhet → stocktakingUnit
   Levert antall / Delivered qty → purchaseQuantity (PREFERRED when both ordered+delivered exist)
@@ -121,6 +123,7 @@ Required JSON shape:
       "unitPrice": number|null,
       "stocktakingUnitPrice": number|null,
       "discount": number|null,
+      "vat": number|null,
       "amount": number|null,
       "expectedDelivery": string|null,
       "lineType": "PRODUCT"|"FEE"|"NOTE"|"CANCELLED"|"UNKNOWN",
@@ -134,7 +137,7 @@ export function buildPoConfirmationUserPrompt(fileName: string): string {
   return `Extract the complete purchase order confirmation:
 - All header fields listed in the schema
 - Every line item including fees and cancelled lines
-- For each line, extract packaging (full Pakning text), discount, purchaseUnit, purchaseQuantity, stocktakingUnit, stockTakingQuantity, stockTakingQuantityPerPurchaseUnit, unitPrice (purchase price), stocktakingUnitPrice, baseMeasurementUnit, pricePerBaseUnit, and stockTakingQuantityPerBaseMeasurementUnit when present; leave missing ones null (especially prices on packing slips)
+- For each line, extract packaging (full Pakning text), discount, vat (MVA/VAT/GST when printed), purchaseUnit, purchaseQuantity, stocktakingUnit, stockTakingQuantity, stockTakingQuantityPerPurchaseUnit, unitPrice (purchase price), stocktakingUnitPrice, baseMeasurementUnit, pricePerBaseUnit, and stockTakingQuantityPerBaseMeasurementUnit when present; leave missing ones null (especially prices/VAT on packing slips)
 - Supplier, customer/buyer, and receiver when present
 - Delivery and payment terms when present
 

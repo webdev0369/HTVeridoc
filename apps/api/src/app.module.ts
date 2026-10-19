@@ -5,6 +5,9 @@ import { AppConfigModule } from './config/config.module';
 import { AuthModule } from './auth/auth.module';
 import { AiModule } from './ai/ai.module';
 import { AiRequest } from './ai/entities/ai-request.entity';
+import { DocumentQueuesModule } from './document-queues/document-queues.module';
+import { DocumentQueue } from './document-queues/entities/document-queue.entity';
+import { DocumentQueueMember } from './document-queues/entities/document-queue-member.entity';
 import { DocumentsModule } from './documents/documents.module';
 import { Extraction } from './extraction/entities/extraction.entity';
 import { ExtractionField } from './extraction/entities/extraction-field.entity';
@@ -56,6 +59,8 @@ import { WebhookEndpoint } from './integrations/handoff/entities/webhook-endpoin
           OrganizationUser,
           RefreshToken,
           Document,
+          DocumentQueue,
+          DocumentQueueMember,
           Extraction,
           ExtractionField,
           ExtractionLineItem,
@@ -89,6 +94,7 @@ import { WebhookEndpoint } from './integrations/handoff/entities/webhook-endpoin
     HandoffModule,
     ReviewModule,
     FieldConfigModule,
+    DocumentQueuesModule,
     ProcessingModule.forRootAsync(),
     DocumentsModule,
   ],

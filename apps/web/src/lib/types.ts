@@ -61,8 +61,30 @@ export interface DocumentDto {
   sha256: string;
   pageCount: number;
   documentType: string;
+  queueId: string | null;
   status: DocumentStatus;
   uploadedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DocumentQueueMemberDto {
+  userId: string;
+  email: string;
+  name: string;
+}
+
+export interface DocumentQueueDto {
+  id: string;
+  organizationId: string;
+  name: string;
+  description: string | null;
+  documentType: string;
+  documentTypeLabel: string;
+  isActive: boolean;
+  memberCount: number;
+  documentCount: number;
+  members: DocumentQueueMemberDto[];
   createdAt: string;
   updatedAt: string;
 }
@@ -121,6 +143,8 @@ export interface ExtractionLineItemDto {
   unitPrice: number | null;
   stocktakingUnitPrice: number | null;
   discount: number | null;
+  /** VAT / GST / MVA % (or amount) when printed on the line. */
+  vat: number | null;
   amount: number | null;
   expectedDelivery: string | null;
   lineType: string;
@@ -385,6 +409,12 @@ export interface DocumentExportStatusDto {
 
 export type QueueName = 'ai-extraction' | 'document-export';
 
+export interface QueueJobAttemptDto {
+  attempt: number;
+  status: 'failed' | 'succeeded' | 'running' | 'pending';
+  error: string | null;
+}
+
 export interface QueueJobDto {
   id: string;
   name: string;
@@ -394,6 +424,9 @@ export interface QueueJobDto {
   state: string;
   failedReason: string | null;
   attemptsMade: number;
+  attemptsMax: number;
+  attemptsSummary: string;
+  attempts: QueueJobAttemptDto[];
   timestamp: number | null;
   processedOn: number | null;
   finishedOn: number | null;

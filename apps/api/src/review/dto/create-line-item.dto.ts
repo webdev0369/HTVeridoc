@@ -59,6 +59,11 @@ export class CreateLineItemDto {
   @IsOptional()
   @IsString()
   @MaxLength(64)
+  vat?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
   amount?: string | null;
 
   @IsOptional()

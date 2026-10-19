@@ -363,6 +363,7 @@ Return JSON only in this exact shape:
       "unitPrice": number|null,
       "stocktakingUnitPrice": number|null,
       "discount": number|null,
+      "vat": number|null,
       "amount": number|null,
       "expectedDelivery": string|null,
       "lineType": "PRODUCT"|"FEE"|"NOTE"|"CANCELLED"|"UNKNOWN",

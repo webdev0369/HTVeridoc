@@ -6,6 +6,7 @@ import type {
   ValidationDto,
   ValidationErrorDto,
 } from '@/lib/types';
+import { Skeleton } from '@/components/ui/skeleton';
 import { columnMapLabel, mappableLineColumns } from '@/lib/column-map';
 import { parseLocaleNumber } from '@/lib/parse-locale-number';
 import {
@@ -36,6 +37,7 @@ type ColKey =
   | 'pricePerBase'
   | 'stPerBase'
   | 'discount'
+  | 'vat'
   | 'amount'
   | 'type';
 
@@ -55,6 +57,7 @@ const DEFAULT_WIDTHS: Record<ColKey, number> = {
   pricePerBase: 100,
   stPerBase: 96,
   discount: 72,
+  vat: 72,
   amount: 120,
   type: 88,
 };
@@ -75,6 +78,7 @@ const MIN_WIDTHS: Record<ColKey, number> = {
   pricePerBase: 72,
   stPerBase: 64,
   discount: 56,
+  vat: 56,
   amount: 80,
   type: 64,
 };
@@ -95,6 +99,7 @@ const COLS: { key: ColKey; label: string; align?: 'left' | 'right' }[] = [
   { key: 'pricePerBase', label: 'Price / base', align: 'right' },
   { key: 'stPerBase', label: 'ST qty / base', align: 'right' },
   { key: 'discount', label: 'Disc.', align: 'right' },
+  { key: 'vat', label: 'VAT %', align: 'right' },
   { key: 'amount', label: 'Total amount', align: 'right' },
   { key: 'type', label: 'Type' },
 ];
@@ -148,6 +153,7 @@ function columnsFromPatch(
     cols.push('stockTakingQuantityPerBaseMeasurementUnit');
   }
   if ('discount' in patch) cols.push('discount');
+  if ('vat' in patch) cols.push('vat');
   if ('amount' in patch) cols.push('amount');
   return cols;
 }
@@ -165,13 +171,15 @@ interface LineItemsTableProps {
   onSaveLine: (
     lineItemId: string,
     patch: Partial<ExtractionLineItemDto>,
-  ) => Promise<void>;
-  onAddLine?: () => Promise<void>;
-  onDeleteLine?: (lineItemId: string) => Promise<void>;
+  ) => void | Promise<void>;
+  onAddLine?: () => void | Promise<void>;
+  onDeleteLine?: (lineItemId: string) => void | Promise<void>;
   mapColumn?: LineReviewColumn | null;
   onStartMapColumn?: (column: LineReviewColumn) => void;
   onCancelMapColumn?: () => void;
   saving?: boolean;
+  /** Auth/permissions still loading — skeleton Map / Add row instead of empty gap. */
+  actionsLoading?: boolean;
   /** Fired when PDF popup confirms a line cell (so the table can show ✓). */
   confirmSignal?: {
     lineId: string;
@@ -193,6 +201,7 @@ export function LineItemsTable({
   onStartMapColumn,
   onCancelMapColumn,
   saving,
+  actionsLoading = false,
   confirmSignal = null,
 }: LineItemsTableProps) {
   const [mapMenuOpen, setMapMenuOpen] = useState(false);
@@ -222,9 +231,10 @@ export function LineItemsTable({
   }, [confirmSignal, markColumnsConfirmed]);
 
   const saveLineAndMark = useCallback(
-    async (lineItemId: string, patch: Partial<ExtractionLineItemDto>) => {
-      await onSaveLine(lineItemId, patch);
+    (lineItemId: string, patch: Partial<ExtractionLineItemDto>) => {
+      // Mark ✓ immediately — parent save is optimistic / fire-and-forget.
       markColumnsConfirmed(lineItemId, columnsFromPatch(patch));
+      void onSaveLine(lineItemId, patch);
     },
     [onSaveLine, markColumnsConfirmed],
   );
@@ -372,6 +382,12 @@ export function LineItemsTable({
           </span>
         </div>
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+          {actionsLoading && !editable ? (
+            <>
+              <Skeleton className="h-7 w-[88px] rounded-md bg-white/10" />
+              <Skeleton className="h-7 w-[76px] rounded-md bg-[#3b82f6]/30" />
+            </>
+          ) : null}
           {editable && onStartMapColumn ? (
             mapColumn ? (
               <button
@@ -705,6 +721,7 @@ function LineRow({
     numToInput(line.stockTakingQuantityPerBaseMeasurementUnit),
   );
   const [discount, setDiscount] = useState(numToInput(line.discount));
+  const [vat, setVat] = useState(numToInput(line.vat));
   const [amount, setAmount] = useState(numToInput(line.amount));
   const [dirty, setDirty] = useState(false);
 
@@ -728,6 +745,7 @@ function LineRow({
     line.pricePerBaseUnit,
     line.stockTakingQuantityPerBaseMeasurementUnit,
     line.discount,
+    line.vat,
     line.amount,
     line.isUserEdited,
   ].join('|');
@@ -747,6 +765,7 @@ function LineRow({
     setPricePerBase(numToInput(line.pricePerBaseUnit));
     setStPerBase(numToInput(line.stockTakingQuantityPerBaseMeasurementUnit));
     setDiscount(numToInput(line.discount));
+    setVat(numToInput(line.vat));
     setAmount(numToInput(line.amount));
     setDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- syncKey captures field values
@@ -771,6 +790,7 @@ function LineRow({
     const nextPricePerBase = parseLocaleNumber(pricePerBase);
     const nextStPerBase = parseLocaleNumber(stPerBase);
     const nextDisc = parseLocaleNumber(discount);
+    const nextVat = parseLocaleNumber(vat);
     const nextAmt = parseLocaleNumber(amount);
 
     const serverPurchaseQty = line.purchaseQuantity ?? line.quantity ?? null;
@@ -821,6 +841,9 @@ function LineRow({
     }
     if (nextDisc !== (line.discount ?? null)) {
       patch.discount = nextDisc;
+    }
+    if (nextVat !== (line.vat ?? null)) {
+      patch.vat = nextVat;
     }
     if (nextAmt !== (line.amount ?? null)) {
       patch.amount = nextAmt;
@@ -1047,6 +1070,12 @@ function LineRow({
         onClick={(e) => e.stopPropagation()}
       >
         {cellInput('discount', discount, setDiscount, 'right')}
+      </td>
+      <td
+        className="overflow-hidden border-b border-white/5 px-3 py-2"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {cellInput('vat', vat, setVat, 'right')}
       </td>
       <td
         className="overflow-hidden border-b border-white/5 px-3 py-2"

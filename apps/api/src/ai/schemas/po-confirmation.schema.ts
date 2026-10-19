@@ -84,6 +84,12 @@ export const lineItemSchema = z.object({
   /** Price per stocktaking unit when shown separately on the document. */
   stocktakingUnitPrice: z.number().nullable().optional(),
   discount: z.number().nullable().optional(),
+  /**
+   * VAT / GST / MVA when printed on the line.
+   * Prefer percent (e.g. 25 for 25%) when the column is clearly a rate;
+   * otherwise the printed VAT amount. Use null if not shown.
+   */
+  vat: z.number().nullable().optional(),
   amount: z.number().nullable().optional(),
   expectedDelivery: z.string().nullable().optional(),
   lineType: z.enum(LINE_TYPES).default('UNKNOWN'),
@@ -129,7 +135,7 @@ export type PoConfirmationExtraction = z.infer<
   typeof poConfirmationExtractionSchema
 >;
 
-export const EXTRACTION_SCHEMA_VERSION = '1.5.1';
+export const EXTRACTION_SCHEMA_VERSION = '1.6.0';
 
 export const HEADER_FIELD_LABELS: Record<HeaderFieldKey, string> = {
   documentNumber: 'Document Number',

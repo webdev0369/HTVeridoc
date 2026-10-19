@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   ParseUUIDPipe,
+  Patch,
   Post,
   Query,
   Res,
@@ -44,6 +45,7 @@ export class DocumentsController {
     @CurrentUser() user: AuthUser,
     @UploadedFile() file: Express.Multer.File,
     @Body('documentType') documentType?: string,
+    @Body('queueId') queueId?: string,
   ) {
     const type =
       (documentType as DocumentType) ||
@@ -53,6 +55,8 @@ export class DocumentsController {
       user.userId,
       file,
       type,
+      queueId || null,
+      user.permissions,
     );
   }
 
@@ -60,29 +64,48 @@ export class DocumentsController {
   @RequirePermissions(PermissionCode.DOCUMENT_READ)
   list(
     @OrganizationId() organizationId: string,
+    @CurrentUser() user: AuthUser,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(20), ParseIntPipe) limit: number,
+    @Query('queueId') queueId?: string,
   ) {
-    return this.documentsService.list(organizationId, page, limit);
+    return this.documentsService.list(organizationId, page, limit, {
+      queueId: queueId || undefined,
+      actor: {
+        userId: user.userId,
+        permissions: user.permissions,
+        documentId: user.documentId,
+      },
+    });
   }
 
   @Get(':id')
   @RequirePermissions(PermissionCode.DOCUMENT_READ)
   findOne(
     @OrganizationId() organizationId: string,
+    @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    return this.documentsService.findOne(organizationId, id);
+    return this.documentsService.findOne(organizationId, id, {
+      userId: user.userId,
+      permissions: user.permissions,
+      documentId: user.documentId,
+    });
   }
 
   @Get(':id/file')
   @RequirePermissions(PermissionCode.DOCUMENT_READ)
   async streamFile(
     @OrganizationId() organizationId: string,
+    @CurrentUser() user: AuthUser,
     @Param('id', ParseUUIDPipe) id: string,
     @Res() res: Response,
   ) {
-    const file = await this.documentsService.getFileStream(organizationId, id);
+    const file = await this.documentsService.getFileStream(organizationId, id, {
+      userId: user.userId,
+      permissions: user.permissions,
+      documentId: user.documentId,
+    });
     res.setHeader('Content-Type', file.mimeType);
     res.setHeader(
       'Content-Disposition',
@@ -90,6 +113,22 @@ export class DocumentsController {
     );
     res.setHeader('Content-Length', String(file.fileSize));
     file.stream.pipe(res);
+  }
+
+  @Patch(':id/queue')
+  @RequirePermissions(PermissionCode.DOCUMENT_EDIT)
+  assignQueue(
+    @OrganizationId() organizationId: string,
+    @CurrentUser() user: AuthUser,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body('queueId') queueId: string | null,
+  ) {
+    return this.documentsService.assignQueue(
+      organizationId,
+      id,
+      queueId || null,
+      { userId: user.userId, permissions: user.permissions },
+    );
   }
 
   @Delete(':id')

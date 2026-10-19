@@ -25,6 +25,7 @@ const LINE_COLUMNS = [
   'pricePerBaseUnit',
   'stockTakingQuantityPerBaseMeasurementUnit',
   'discount',
+  'vat',
   'amount',
 ] as const;
 

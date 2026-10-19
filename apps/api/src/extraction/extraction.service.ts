@@ -273,7 +273,11 @@ export class ExtractionService {
     }
   }
 
-  async getByDocument(organizationId: string, documentId: string) {
+  async getByDocument(
+    organizationId: string,
+    documentId: string,
+    options?: { light?: boolean },
+  ) {
     const document = await this.documentsRepo.findOne({
       where: { id: documentId },
     });
@@ -286,7 +290,10 @@ export class ExtractionService {
 
     const extraction = await this.extractionsRepo.findOne({
       where: { documentId },
-      relations: ['fields', 'lineItems', 'sources'],
+      // Skip sources + heavy JSON on edit responses (light mode).
+      relations: options?.light
+        ? ['fields', 'lineItems']
+        : ['fields', 'lineItems', 'sources'],
       order: {
         fields: { fieldKey: 'ASC' },
         lineItems: { sortOrder: 'ASC' },
@@ -295,7 +302,7 @@ export class ExtractionService {
     if (!extraction) {
       throw new NotFoundException('Extraction not found');
     }
-    return this.toDto(extraction, organizationId, document.documentType);
+    return this.toDto(extraction, organizationId, document.documentType, options);
   }
 
   async getEvents(organizationId: string, documentId: string) {
@@ -315,6 +322,7 @@ export class ExtractionService {
     extraction: Extraction,
     organizationId: string,
     documentType: string,
+    options?: { light?: boolean },
   ) {
     const preferLiters = await this.organizations.preferLitersForVolumeBase(
       organizationId,
@@ -348,8 +356,8 @@ export class ExtractionService {
       model: extraction.model,
       promptVersion: extraction.promptVersion,
       schemaVersion: extraction.schemaVersion,
-      structuredData: extraction.structuredData,
-      rawResponse: extraction.rawResponse,
+      structuredData: options?.light ? null : extraction.structuredData,
+      rawResponse: options?.light ? null : extraction.rawResponse,
       errorMessage: extraction.errorMessage,
       processingTimeMs: extraction.processingTimeMs,
       summary,
@@ -456,6 +464,7 @@ export class ExtractionService {
             ? Number(l.stocktakingUnitPrice)
             : null,
         discount: l.discount != null ? Number(l.discount) : null,
+        vat: l.vat != null ? Number(l.vat) : null,
         amount: l.amount != null ? Number(l.amount) : null,
         expectedDelivery: l.expectedDelivery,
         lineType: l.lineType,

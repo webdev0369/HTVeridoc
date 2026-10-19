@@ -16,6 +16,7 @@ export const LINE_ITEM_COLUMN_KEYS = [
   'pricePerBaseUnit',
   'stockTakingQuantityPerBaseMeasurementUnit',
   'discount',
+  'vat',
   'amount',
 ] as const;
 
@@ -36,6 +37,7 @@ export const LINE_ITEM_COLUMN_LABELS: Record<LineItemColumnKey, string> = {
   pricePerBaseUnit: 'Price / base',
   stockTakingQuantityPerBaseMeasurementUnit: 'ST qty / base',
   discount: 'Disc.',
+  vat: 'VAT %',
   amount: 'Total amount',
 };
 

@@ -49,20 +49,34 @@ export class ValidationService {
       throw new NotFoundException('Completed extraction not found');
     }
 
+    // Re-validate during active review must NOT bounce status through
+    // VALIDATING → READY_FOR_REVIEW (slow + webhooks + wipes In review).
+    const preserveStatus =
+      document.status === DocumentStatus.IN_REVIEW ||
+      document.status === DocumentStatus.APPROVED ||
+      document.status === DocumentStatus.REJECTED ||
+      document.status === DocumentStatus.EXPORTING ||
+      document.status === DocumentStatus.EXPORTED ||
+      document.status === DocumentStatus.EXPORT_FAILED;
+
     await this.processingLog.log(
       documentId,
       organizationId,
       'VALIDATION_START',
-      'Running deterministic validation…',
+      preserveStatus
+        ? 'Re-validating without status change…'
+        : 'Running deterministic validation…',
     );
 
-    document.status = DocumentStatus.VALIDATING;
-    await this.documentsRepo.save(document);
-    this.handoff.notifyStatus(
-      organizationId,
-      documentId,
-      DocumentStatus.VALIDATING,
-    );
+    if (!preserveStatus) {
+      document.status = DocumentStatus.VALIDATING;
+      await this.documentsRepo.save(document);
+      this.handoff.notifyStatus(
+        organizationId,
+        documentId,
+        DocumentStatus.VALIDATING,
+      );
+    }
 
     const modeMap = await this.fieldConfigService.getModeMap(
       organizationId,
@@ -93,19 +107,41 @@ export class ValidationService {
           ? 'passed_with_warnings'
           : 'passed';
 
+    // Upsert one row per document — concurrent re-validates must not
+    // race on delete+insert (validation_results_document_id_key).
     const result = await this.dataSource.transaction(async (manager) => {
-      await manager.delete(ValidationResult, { documentId });
-
-      const saved = await manager.save(
-        manager.create(ValidationResult, {
-          documentId,
-          organizationId,
-          extractionId: extraction.id,
-          status,
-          errorCount,
-          warningCount,
-        }),
+      // Serialize concurrent validates for the same document.
+      await manager.query(
+        `SELECT pg_advisory_xact_lock(hashtext($1::text))`,
+        [documentId],
       );
+
+      let saved = await manager.findOne(ValidationResult, {
+        where: { documentId },
+      });
+
+      if (saved) {
+        await manager.delete(DocumentValidationError, {
+          validationResultId: saved.id,
+        });
+        saved.organizationId = organizationId;
+        saved.extractionId = extraction.id;
+        saved.status = status;
+        saved.errorCount = errorCount;
+        saved.warningCount = warningCount;
+        saved = await manager.save(saved);
+      } else {
+        saved = await manager.save(
+          manager.create(ValidationResult, {
+            documentId,
+            organizationId,
+            extractionId: extraction.id,
+            status,
+            errorCount,
+            warningCount,
+          }),
+        );
+      }
 
       if (issues.length) {
         await manager.save(
@@ -126,14 +162,16 @@ export class ValidationService {
       return saved;
     });
 
-    // Rossum-style: still open for human review even when there are errors.
-    document.status = DocumentStatus.READY_FOR_REVIEW;
-    await this.documentsRepo.save(document);
-    this.handoff.notifyStatus(
-      organizationId,
-      documentId,
-      DocumentStatus.READY_FOR_REVIEW,
-    );
+    // First-time validation → ready for review. During review, keep status.
+    if (!preserveStatus) {
+      document.status = DocumentStatus.READY_FOR_REVIEW;
+      await this.documentsRepo.save(document);
+      this.handoff.notifyStatus(
+        organizationId,
+        documentId,
+        DocumentStatus.READY_FOR_REVIEW,
+      );
+    }
 
     await this.processingLog.log(
       documentId,
@@ -142,7 +180,7 @@ export class ValidationService {
       `Validation ${status}: ${errorCount} error(s), ${warningCount} warning(s)`,
       {
         level: errorCount > 0 ? 'warn' : 'success',
-        meta: { status, errorCount, warningCount },
+        meta: { status, errorCount, warningCount, preserveStatus },
       },
     );
 

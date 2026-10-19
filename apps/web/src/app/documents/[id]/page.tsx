@@ -20,6 +20,12 @@ import {
   ReviewEditor,
 } from '@/components/review-editor';
 import { StatusBadge } from '@/components/status-badge';
+import {
+  DocumentPageSkeleton,
+  LineItemsTableSkeleton,
+  ReviewFooterActionsSkeleton,
+  ReviewSidebarSkeleton,
+} from '@/components/document-review-skeletons';
 import { apiFetch, ApiError } from '@/lib/api';
 import { useAuth } from '@/lib/auth-context';
 import { isEmbedSession } from '@/lib/editor-session';
@@ -92,7 +98,7 @@ export default function DocumentDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
   const queryClient = useQueryClient();
-  const { user, isEmbed } = useAuth();
+  const { user, loading: authLoading, isEmbed } = useAuth();
   const embedMode = isEmbed || isEmbedSession(id);
   const shellLayout = embedMode ? 'embed' : 'workspace';
 
@@ -117,6 +123,7 @@ export default function DocumentDetailPage() {
   tableHeightRef.current = tableHeight;
   /** Avoid re-firing auto-validate for the same document while stuck on EXTRACTED */
   const autoValidateRef = useRef<string | null>(null);
+  const autoStartReviewRef = useRef<string | null>(null);
 
   useEffect(() => {
     try {
@@ -247,7 +254,7 @@ export default function DocumentDetailPage() {
         .catch(() => {
           queryClient.invalidateQueries({ queryKey: ['validation', id] });
         });
-    }, 600);
+    }, 1200);
   };
 
   const afterExtractionEdit = (extraction: ExtractionDto) => {
@@ -299,8 +306,29 @@ export default function DocumentDetailPage() {
       apiFetch<DocumentDto>(`/documents/${id}/review/start`, {
         method: 'POST',
       }),
-    onSuccess: invalidateDoc,
+    onSuccess: (doc) => {
+      queryClient.setQueryData(['documents', id], doc);
+      invalidateDoc();
+    },
   });
+
+  // Client backup: if GET already flipped status server-side, cache updates on
+  // refetch. Also call start when still ready (e.g. stale cache).
+  useEffect(() => {
+    if (!id || !data) return;
+    if (
+      data.status !== 'READY_FOR_REVIEW' &&
+      data.status !== 'VALIDATION_FAILED'
+    ) {
+      return;
+    }
+    if (!hasPerm(user?.permissions, 'document.edit')) return;
+    if (autoStartReviewRef.current === id) return;
+    if (startReviewMutation.isPending) return;
+    autoStartReviewRef.current = id;
+    startReviewMutation.mutate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mutate once per doc open
+  }, [id, data?.status, user?.permissions]);
 
   const approveMutation = useMutation({
     mutationFn: () =>
@@ -362,6 +390,12 @@ export default function DocumentDetailPage() {
     },
   });
 
+  /** After cell ✓ — cache already updated optimistically; only soft side-effects. */
+  const afterCellSave = () => {
+    queryClient.invalidateQueries({ queryKey: ['events', id] });
+    scheduleRevalidate();
+  };
+
   const saveFieldMutation = useMutation({
     mutationFn: ({
       fieldId,
@@ -370,14 +404,14 @@ export default function DocumentDetailPage() {
       fieldId: string;
       currentValue: string | null;
     }) =>
-      apiFetch<ExtractionDto>(
+      apiFetch<{ ok: true }>(
         `/documents/${id}/extraction/fields/${fieldId}`,
         {
           method: 'PATCH',
           body: JSON.stringify({ currentValue }),
         },
       ),
-    onSuccess: afterExtractionEdit,
+    onSuccess: afterCellSave,
   });
 
   const saveLineMutation = useMutation({
@@ -428,10 +462,11 @@ export default function DocumentDetailPage() {
         body.stocktakingUnitPrice = toApiScalar(patch.stocktakingUnitPrice);
       }
       if ('discount' in patch) body.discount = toApiScalar(patch.discount);
+      if ('vat' in patch) body.vat = toApiScalar(patch.vat);
       if ('amount' in patch) body.amount = toApiScalar(patch.amount);
       if ('lineType' in patch) body.lineType = patch.lineType;
 
-      return apiFetch<ExtractionDto>(
+      return apiFetch<{ ok: true }>(
         `/documents/${id}/extraction/line-items/${lineItemId}`,
         {
           method: 'PATCH',
@@ -439,7 +474,7 @@ export default function DocumentDetailPage() {
         },
       );
     },
-    onSuccess: afterExtractionEdit,
+    onSuccess: afterCellSave,
   });
 
   const addLineMutation = useMutation({
@@ -704,32 +739,52 @@ export default function DocumentDetailPage() {
     return raw;
   };
 
-  const handlePdfValuePick = async (
+  const handlePdfValuePick = (
     value: string,
     box?: { x: number; y: number; width: number; height: number },
   ) => {
     if (!selection || !canEdit || !value.trim()) return;
     if (selection.type === 'field') {
       const currentValue = normalizeFieldValue(selection, value.trim());
-      await saveFieldMutation.mutateAsync({
-        fieldId: selection.id,
-        currentValue,
+      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
+        if (!prev?.fields) return prev;
+        return {
+          ...prev,
+          fields: prev.fields.map((f) =>
+            f.id === selection.id
+              ? { ...f, currentValue, isUserEdited: true }
+              : f,
+          ),
+        };
       });
       setSelection({
         ...selection,
         value: currentValue,
         tone: 'edited',
         page: pdfPage,
-        // Keep the click/detect box so the float stays on the printed date.
         boundingBox: box ?? selection.boundingBox,
       });
+      void saveFieldMutation
+        .mutateAsync({ fieldId: selection.id, currentValue })
+        .catch((err) => {
+          toast.error(
+            err instanceof ApiError ? err.message : 'Failed to save field',
+          );
+        });
       return;
     }
     if (selection.type === 'line') {
       const patch = lineColumnToPatch(selection.column, value.trim());
-      await saveLineMutation.mutateAsync({
-        lineItemId: selection.id,
-        patch,
+      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
+        if (!prev?.lineItems) return prev;
+        return {
+          ...prev,
+          lineItems: prev.lineItems.map((l) =>
+            l.id === selection.id
+              ? { ...l, ...patch, isUserEdited: true }
+              : l,
+          ),
+        };
       });
       setLineConfirmSignal({
         lineId: selection.id,
@@ -743,11 +798,18 @@ export default function DocumentDetailPage() {
         page: pdfPage,
         boundingBox: box ?? selection.boundingBox,
       });
+      void saveLineMutation
+        .mutateAsync({ lineItemId: selection.id, patch })
+        .catch((err) => {
+          toast.error(
+            err instanceof ApiError ? err.message : 'Failed to save line',
+          );
+        });
     }
   };
 
-  /** Rossum green check — save value, then next cell in same row (then next row). */
-  const handleConfirmValue = async (editedValue?: string) => {
+  /** Rossum green check — advance UI immediately; save in background (no spinner wait). */
+  const handleConfirmValue = (editedValue?: string) => {
     if (!selection || !canEdit) return;
     const next =
       editedValue !== undefined
@@ -756,22 +818,50 @@ export default function DocumentDetailPage() {
 
     const current = selection;
 
+    // Optimistic cache so the table updates without waiting on PATCH.
     if (current.type === 'field') {
       const currentValue = normalizeFieldValue(current, next);
-      await saveFieldMutation.mutateAsync({
-        fieldId: current.id,
-        currentValue,
+      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
+        if (!prev?.fields) return prev;
+        return {
+          ...prev,
+          fields: prev.fields.map((f) =>
+            f.id === current.id
+              ? { ...f, currentValue, isUserEdited: true }
+              : f,
+          ),
+        };
       });
+      void saveFieldMutation
+        .mutateAsync({ fieldId: current.id, currentValue })
+        .catch((err) => {
+          toast.error(
+            err instanceof ApiError ? err.message : 'Failed to save field',
+          );
+        });
     } else {
-      await saveLineMutation.mutateAsync({
-        lineItemId: current.id,
-        patch: lineColumnToPatch(current.column, next),
+      const patch = lineColumnToPatch(current.column, next);
+      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
+        if (!prev?.lineItems) return prev;
+        return {
+          ...prev,
+          lineItems: prev.lineItems.map((l) =>
+            l.id === current.id ? { ...l, ...patch, isUserEdited: true } : l,
+          ),
+        };
       });
       setLineConfirmSignal({
         lineId: current.id,
         column: current.column,
         at: Date.now(),
       });
+      void saveLineMutation
+        .mutateAsync({ lineItemId: current.id, patch })
+        .catch((err) => {
+          toast.error(
+            err instanceof ApiError ? err.message : 'Failed to save line',
+          );
+        });
     }
 
     const extraction = queryClient.getQueryData<ExtractionDto>([
@@ -796,22 +886,49 @@ export default function DocumentDetailPage() {
     }
   };
 
-  /** Rossum trash — clear selected field / line cell */
-  const handleClearValue = async () => {
+  /** Rossum trash — clear selected field / line cell (optimistic). */
+  const handleClearValue = () => {
     if (!selection || !canEdit) return;
     if (selection.type === 'field') {
-      await saveFieldMutation.mutateAsync({
-        fieldId: selection.id,
-        currentValue: null,
+      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
+        if (!prev?.fields) return prev;
+        return {
+          ...prev,
+          fields: prev.fields.map((f) =>
+            f.id === selection.id
+              ? { ...f, currentValue: null, isUserEdited: true }
+              : f,
+          ),
+        };
       });
       setSelection({ ...selection, value: null, tone: 'ai' });
+      void saveFieldMutation
+        .mutateAsync({ fieldId: selection.id, currentValue: null })
+        .catch((err) => {
+          toast.error(
+            err instanceof ApiError ? err.message : 'Failed to clear field',
+          );
+        });
       return;
     }
-    await saveLineMutation.mutateAsync({
-      lineItemId: selection.id,
-      patch: lineColumnToPatch(selection.column, null),
+    const patch = lineColumnToPatch(selection.column, null);
+    queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
+      if (!prev?.lineItems) return prev;
+      return {
+        ...prev,
+        lineItems: prev.lineItems.map((l) =>
+          l.id === selection.id ? { ...l, ...patch, isUserEdited: true } : l,
+        ),
+      };
     });
     setSelection({ ...selection, value: null, tone: 'ai' });
+    void saveLineMutation
+      .mutateAsync({ lineItemId: selection.id, patch })
+      .catch((err) => {
+        toast.error(
+          err instanceof ApiError ? err.message : 'Failed to clear line',
+        );
+      });
   };
 
   const isLive = Boolean(data?.status && LIVE_STATUSES.has(data.status));
@@ -859,9 +976,7 @@ export default function DocumentDetailPage() {
   if (isLoading) {
     return (
       <AppShell layout={shellLayout}>
-        <div className="flex flex-1 items-center justify-center text-slate-400">
-          Loading document…
-        </div>
+        <DocumentPageSkeleton />
       </AppShell>
     );
   }
@@ -882,8 +997,19 @@ export default function DocumentDetailPage() {
     saveFieldMutation.error ||
     saveLineMutation.error;
 
-  const reviewFooter =
-    (canStartReview || canApprove || canReject || canReopen) && (
+  const hasReviewActions =
+    canStartReview || canApprove || canReject || canReopen;
+  /** Permissions / extraction still resolving — show button skeletons instead of empty footer. */
+  const reviewActionsPending =
+    authLoading ||
+    (Boolean(data) &&
+      REVIEW_UI_STATUSES.has(data!.status) &&
+      (extractionQuery.isLoading || extractionQuery.isFetching) &&
+      !extractionQuery.data);
+
+  const reviewFooter = reviewActionsPending ? (
+    <ReviewFooterActionsSkeleton stacked />
+  ) : hasReviewActions ? (
     <div className="space-y-0">
       <ReviewActions
         stacked
@@ -915,7 +1041,7 @@ export default function DocumentDetailPage() {
         }
       />
     </div>
-  );
+  ) : null;
 
   return (
     <AppShell layout={shellLayout}>
@@ -1004,7 +1130,7 @@ export default function DocumentDetailPage() {
               editable={canEdit}
               selection={selection}
               onSelect={handleSelect}
-              saving={saveFieldMutation.isPending}
+              saving={false}
               footer={reviewFooter}
               onSaveField={async (fieldId, currentValue) => {
                 const field = extractionQuery.data?.fields?.find(
@@ -1014,12 +1140,40 @@ export default function DocumentDetailPage() {
                   field && isDateFieldKey(field.fieldKey)
                     ? normalizeDateInput(currentValue)
                     : currentValue;
-                await saveFieldMutation.mutateAsync({
-                  fieldId,
-                  currentValue: normalized,
-                });
+                queryClient.setQueryData<ExtractionDto>(
+                  ['extraction', id],
+                  (prev) => {
+                    if (!prev?.fields) return prev;
+                    return {
+                      ...prev,
+                      fields: prev.fields.map((f) =>
+                        f.id === fieldId
+                          ? {
+                              ...f,
+                              currentValue: normalized,
+                              isUserEdited: true,
+                            }
+                          : f,
+                      ),
+                    };
+                  },
+                );
+                void saveFieldMutation
+                  .mutateAsync({ fieldId, currentValue: normalized })
+                  .catch((err) => {
+                    toast.error(
+                      err instanceof ApiError
+                        ? err.message
+                        : 'Failed to save field',
+                    );
+                  });
               }}
             />
+          ) : reviewActionsPending ||
+            (Boolean(data) &&
+              REVIEW_UI_STATUSES.has(data.status) &&
+              extractionQuery.isLoading) ? (
+            <ReviewSidebarSkeleton />
           ) : showProcessingPanel ? (
             <ProcessingSidebar
               events={eventsQuery.data ?? []}
@@ -1072,11 +1226,7 @@ export default function DocumentDetailPage() {
             onClearValue={() => {
               void handleClearValue();
             }}
-            confirming={
-              saveFieldMutation.isPending ||
-              saveLineMutation.isPending ||
-              bulkColumnMutation.isPending
-            }
+            confirming={false}
             className="min-h-0 min-w-0 flex-1"
           />
 
@@ -1110,12 +1260,33 @@ export default function DocumentDetailPage() {
                 onCancelMapColumn={handleCancelMapColumn}
                 confirmSignal={lineConfirmSignal}
                 saving={
-                  saveLineMutation.isPending ||
-                  addLineMutation.isPending ||
-                  bulkColumnMutation.isPending
+                  addLineMutation.isPending || bulkColumnMutation.isPending
                 }
+                actionsLoading={authLoading}
                 onSaveLine={async (lineItemId, patch) => {
-                  await saveLineMutation.mutateAsync({ lineItemId, patch });
+                  queryClient.setQueryData<ExtractionDto>(
+                    ['extraction', id],
+                    (prev) => {
+                      if (!prev?.lineItems) return prev;
+                      return {
+                        ...prev,
+                        lineItems: prev.lineItems.map((l) =>
+                          l.id === lineItemId
+                            ? { ...l, ...patch, isUserEdited: true }
+                            : l,
+                        ),
+                      };
+                    },
+                  );
+                  void saveLineMutation
+                    .mutateAsync({ lineItemId, patch })
+                    .catch((err) => {
+                      toast.error(
+                        err instanceof ApiError
+                          ? err.message
+                          : 'Failed to save line',
+                      );
+                    });
                 }}
                 onAddLine={async () => {
                   await addLineMutation.mutateAsync();
@@ -1125,6 +1296,11 @@ export default function DocumentDetailPage() {
                   deleteLineMutation.mutate(lineItemId);
                 }}
               />
+            ) : reviewActionsPending ||
+              (Boolean(data) &&
+                REVIEW_UI_STATUSES.has(data.status) &&
+                extractionQuery.isLoading) ? (
+              <LineItemsTableSkeleton rows={4} />
             ) : (
               <div className="flex h-full items-center justify-center bg-[#0f1419] text-sm text-slate-500">
                 Line items will appear here after extraction

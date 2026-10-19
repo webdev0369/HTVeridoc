@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { FileUp, Search, Upload } from 'lucide-react';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { AppShell } from '@/components/app-shell';
 import { StatusBadge } from '@/components/status-badge';
@@ -33,6 +33,7 @@ import { apiFetch, ApiError } from '@/lib/api';
 import type {
   DocumentDto,
   DocumentListResponse,
+  DocumentQueueDto,
   DocumentStatus,
   DocumentTypeOptionDto,
 } from '@/lib/types';
@@ -43,6 +44,7 @@ export default function DocumentsPage() {
   const [documentType, setDocumentType] = useState(
     'PURCHASE_ORDER_CONFIRMATION',
   );
+  const [queueId, setQueueId] = useState<string>('none');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
@@ -57,18 +59,40 @@ export default function DocumentsPage() {
       apiFetch<DocumentTypeOptionDto[]>('/field-config/document-types'),
   });
 
+  const queuesQuery = useQuery({
+    queryKey: ['document-queues'],
+    queryFn: () => apiFetch<DocumentQueueDto[]>('/document-queues'),
+  });
+
+  const activeQueues = useMemo(
+    () => (queuesQuery.data ?? []).filter((q) => q.isActive),
+    [queuesQuery.data],
+  );
+
+  const selectedQueue = activeQueues.find((q) => q.id === queueId);
+
+  useEffect(() => {
+    if (selectedQueue) {
+      setDocumentType(selectedQueue.documentType);
+    }
+  }, [selectedQueue]);
+
   const upload = useMutation({
     mutationFn: async (file: File) => {
       const form = new FormData();
       form.append('file', file);
       form.append('documentType', documentType);
+      if (queueId !== 'none') {
+        form.append('queueId', queueId);
+      }
       return apiFetch<DocumentDto>('/documents', {
         method: 'POST',
         body: form,
       });
     },
     onSuccess: (doc) => {
-      queryClient.invalidateQueries({ queryKey: ['documents'] });
+      void queryClient.invalidateQueries({ queryKey: ['documents'] });
+      void queryClient.invalidateQueries({ queryKey: ['document-queues'] });
       toast.success(`Uploaded ${doc.fileName}`);
     },
     onError: (err) => {
@@ -80,19 +104,31 @@ export default function DocumentsPage() {
     (t) => t.documentType === documentType,
   );
 
+  const queueNameById = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const q of queuesQuery.data ?? []) {
+      map.set(q.id, q.name);
+    }
+    return map;
+  }, [queuesQuery.data]);
+
   const filtered = useMemo(() => {
     const items = data?.items ?? [];
     const q = search.trim().toLowerCase();
     return items.filter((doc) => {
       if (statusFilter !== 'all' && doc.status !== statusFilter) return false;
       if (!q) return true;
+      const queueName = doc.queueId
+        ? (queueNameById.get(doc.queueId) ?? '')
+        : '';
       return (
         doc.fileName.toLowerCase().includes(q) ||
         doc.documentType.toLowerCase().includes(q) ||
-        doc.status.toLowerCase().includes(q)
+        doc.status.toLowerCase().includes(q) ||
+        queueName.toLowerCase().includes(q)
       );
     });
-  }, [data?.items, search, statusFilter]);
+  }, [data?.items, search, statusFilter, queueNameById]);
 
   const statuses = useMemo(() => {
     const set = new Set((data?.items ?? []).map((d) => d.status));
@@ -104,14 +140,36 @@ export default function DocumentsPage() {
       <div className="space-y-6">
         <PageHeader
           title="Documents"
-          description="Upload PDFs and choose the document type for extraction."
+          description="Upload PDFs into a queue (recommended) or with a document type only."
           actions={
             <>
               <div className="space-y-1.5">
                 <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+                  Queue
+                </Label>
+                <Select value={queueId} onValueChange={setQueueId}>
+                  <SelectTrigger className="min-w-[220px]">
+                    <SelectValue placeholder="Optional queue" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">No queue</SelectItem>
+                    {activeQueues.map((q) => (
+                      <SelectItem key={q.id} value={q.id}>
+                        {q.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
                   Document type
                 </Label>
-                <Select value={documentType} onValueChange={setDocumentType}>
+                <Select
+                  value={documentType}
+                  onValueChange={setDocumentType}
+                  disabled={Boolean(selectedQueue)}
+                >
                   <SelectTrigger className="min-w-[240px]">
                     <SelectValue />
                   </SelectTrigger>
@@ -174,7 +232,7 @@ export default function DocumentsPage() {
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search by file name or status…"
+                  placeholder="Search by file name, queue, or status…"
                   className="pl-9"
                 />
               </div>
@@ -209,7 +267,7 @@ export default function DocumentsPage() {
                 description={
                   data?.items?.length
                     ? 'Try a different search or status filter.'
-                    : 'Upload a PDF purchase order confirmation to start extraction.'
+                    : 'Upload a PDF, or open Queues to work in a dedicated inbox.'
                 }
                 action={
                   !data?.items?.length ? (
@@ -228,6 +286,7 @@ export default function DocumentsPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>File</TableHead>
+                    <TableHead>Queue</TableHead>
                     <TableHead>Status</TableHead>
                     <TableHead>Pages</TableHead>
                     <TableHead>Uploaded</TableHead>
@@ -248,6 +307,18 @@ export default function DocumentsPage() {
                             {doc.fileName}
                           </span>
                         </Link>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {doc.queueId ? (
+                          <Link
+                            href={`/queues/${doc.queueId}`}
+                            className="hover:text-primary hover:underline"
+                          >
+                            {queueNameById.get(doc.queueId) ?? 'Queue'}
+                          </Link>
+                        ) : (
+                          '—'
+                        )}
                       </TableCell>
                       <TableCell className="whitespace-nowrap">
                         <StatusBadge status={doc.status as DocumentStatus} />

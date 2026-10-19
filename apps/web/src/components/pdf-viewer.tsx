@@ -810,25 +810,43 @@ function resolveHighlightBoxes(
   return [];
 }
 
-/** Keep the edit popup glued to the highlight box (flip above when near bottom). */
+/**
+ * Park the edit popup clear of the highlight so the printed value stays
+ * visible and clickable. Prefer below the row (line amounts), else beside.
+ */
 function popupPositionStyle(box: BoundingBox): CSSProperties {
+  const boxLeft = box.x * 100;
+  const boxRight = (box.x + box.width) * 100;
   const boxTop = box.y * 100;
   const boxBottom = (box.y + box.height) * 100;
   const boxCenterX = (box.x + box.width / 2) * 100;
-  // Approx popup size as % of a typical page (~700–900px wide, tall doc).
-  const popupW = 28;
-  const popupH = 16;
 
-  const placeAbove = boxBottom > 70;
-  const top = placeAbove
-    ? Math.max(1, boxTop - popupH - 0.6)
-    : Math.min(boxBottom + 0.6, 100 - popupH);
+  const spaceBelow = 100 - boxBottom;
+  const spaceAbove = boxTop;
+  const spaceRight = 100 - boxRight;
+  const spaceLeft = boxLeft;
+  const sideRoom = 26;
 
-  // Center on the highlight. Shifting right-column floats left made qty
-  // editors look like they were parked on the item code.
-  const left = Math.min(Math.max(boxCenterX - popupW / 2, 1), 100 - popupW);
+  // Prefer below/above so the highlighted number is never under the panel.
+  if (spaceBelow >= 20 || spaceAbove >= 20) {
+    const placeBelow = spaceBelow >= 18 || spaceBelow >= spaceAbove;
+    return {
+      left: `${Math.min(Math.max(boxCenterX, 16), 84)}%`,
+      top: placeBelow ? `${boxBottom}%` : `${boxTop}%`,
+      transform: placeBelow
+        ? 'translate(-50%, 14px)'
+        : 'translate(-50%, calc(-100% - 14px))',
+    };
+  }
 
-  return { left: `${left}%`, top: `${top}%` };
+  const placeRight = spaceRight >= sideRoom || spaceRight >= spaceLeft;
+  return {
+    left: placeRight ? `${boxRight}%` : `${boxLeft}%`,
+    top: `${Math.min(Math.max(boxTop, 0.5), 82)}%`,
+    transform: placeRight
+      ? 'translate(10px, 0)'
+      : 'translate(calc(-100% - 10px), 0)',
+  };
 }
 
 export function PdfViewer({
@@ -1217,7 +1235,8 @@ export function PdfViewer({
         )}
         {!columnMapMode && pickMode && (
           <span className="rounded bg-[#3b82f6]/20 px-2 py-0.5 text-[11px] font-medium text-[#93c5fd]">
-            Click a value on the PDF to fill “{highlight?.label ?? 'field'}”
+            Type the correct value, or click it on the PDF — “
+            {highlight?.label ?? 'field'}”
           </span>
         )}
         {rendering && (
@@ -1329,21 +1348,7 @@ export function PdfViewer({
                   ))}
                 </div>
 
-                {pageBoxes.map((box, i) => (
-                  <div
-                    key={`hl-${pageView.page}-${i}`}
-                    className={`pointer-events-none absolute border-2 ${
-                      toneClass[highlight?.tone ?? 'ai']
-                    }`}
-                    style={{
-                      left: `${box.x * 100}%`,
-                      top: `${box.y * 100}%`,
-                      width: `${box.width * 100}%`,
-                      height: `${box.height * 100}%`,
-                    }}
-                  />
-                ))}
-
+                {/* Popup first (lower z), highlight ring on top so the PDF value stays readable. */}
                 {isHighlightPage && highlight && (
                   <HighlightPopup
                     highlight={highlight}
@@ -1354,6 +1359,21 @@ export function PdfViewer({
                     onClearValue={onClearValue}
                   />
                 )}
+
+                {pageBoxes.map((box, i) => (
+                  <div
+                    key={`hl-${pageView.page}-${i}`}
+                    className={`pointer-events-none absolute z-40 border-2 ${
+                      toneClass[highlight?.tone ?? 'ai']
+                    }`}
+                    style={{
+                      left: `${box.x * 100}%`,
+                      top: `${box.y * 100}%`,
+                      width: `${Math.max(box.width * 100, 1.2)}%`,
+                      height: `${Math.max(box.height * 100, 1.4)}%`,
+                    }}
+                  />
+                ))}
 
                 {pageCount > 1 && (
                   <span className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/50 px-1.5 py-0.5 text-[10px] font-medium text-white/80">
@@ -1393,85 +1413,90 @@ function HighlightPopup({
   // Allow confirm with empty value so optional line cells can be skipped.
   const canSave = pickMode && !confirming;
 
+  const anchorBox = primaryBox ?? highlight.boundingBox ?? null;
+
   return (
     <div
-      className="absolute z-30 w-[240px] rounded-xl bg-[#1a2230] p-2.5 text-white shadow-2xl ring-1 ring-[#3b82f6]/50"
+      className="pointer-events-none absolute z-30 w-[240px] max-w-[min(240px,calc(100%-16px))] rounded-xl bg-[#1a2230]/95 p-2.5 text-white shadow-2xl ring-1 ring-[#3b82f6]/50 backdrop-blur-[2px]"
       style={
-        primaryBox
-          ? popupPositionStyle(primaryBox)
-          : { left: '12px', top: '12px' }
+        anchorBox
+          ? popupPositionStyle(anchorBox)
+          : { right: '12px', bottom: '12px', left: 'auto', top: 'auto' }
       }
-      onMouseDown={(e) => e.stopPropagation()}
     >
-      <div className="rounded-lg border border-white/15 bg-[#0f1419] px-2.5 py-2">
-        {pickMode ? (
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && canSave) {
-                e.preventDefault();
-                onConfirmValue?.(draft.trim());
-              }
-            }}
-            className="w-full border-0 bg-transparent text-[17px] font-semibold leading-tight tracking-tight text-white outline-none placeholder:text-slate-600"
-            placeholder="Enter value…"
-            aria-label={highlight.label || 'Field value'}
-          />
-        ) : (
-          <p className="truncate text-[17px] font-semibold leading-tight tracking-tight">
-            {highlight.value || '—'}
+      {/* Interactive only — rest of panel lets PDF clicks pass through so you can re-pick. */}
+      <div
+        className="pointer-events-auto"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <div className="rounded-lg border border-white/15 bg-[#0f1419] px-2.5 py-2">
+          {pickMode ? (
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && canSave) {
+                  e.preventDefault();
+                  onConfirmValue?.(draft.trim());
+                }
+              }}
+              className="w-full border-0 bg-transparent text-[17px] font-semibold leading-tight tracking-tight text-white outline-none placeholder:text-slate-600"
+              placeholder="Enter value…"
+              aria-label={highlight.label || 'Field value'}
+              autoFocus
+            />
+          ) : (
+            <p className="truncate text-[17px] font-semibold leading-tight tracking-tight">
+              {highlight.value || '—'}
+            </p>
+          )}
+        </div>
+        <p className="mt-1.5 truncate px-0.5 text-xs text-slate-400">
+          {highlight.label || 'Selected field'}
+        </p>
+        <p className="mt-1 px-0.5 text-[11px] text-slate-500">
+          Type the correct value, or click it on the PDF, then press ✓
+        </p>
+        {!anchorBox && (
+          <p className="mt-1 px-0.5 text-[11px] text-amber-300/90">
+            Click text on the PDF to reassign
           </p>
         )}
-      </div>
-      <p className="mt-1.5 truncate px-0.5 text-xs text-slate-400">
-        {highlight.label || 'Selected field'}
-      </p>
-      <p className="mt-1 px-0.5 text-[11px] text-slate-500">
-        Edit the value, then press ✓ to save and go to next
-      </p>
-      {!primaryBox && (
-        <p className="mt-1 px-0.5 text-[11px] text-amber-300/90">
-          Click text on the PDF to reassign
-        </p>
-      )}
-      <div className="mt-2 flex items-center justify-end gap-2 border-t border-white/10 pt-2">
-        <button
-          type="button"
-          title="Clear value"
-          disabled={!pickMode || confirming}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onClearValue?.();
-          }}
-          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
-        >
-          <TrashIcon />
-        </button>
-        <button
-          type="button"
-          title="Save and go to next"
-          disabled={!canSave}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onConfirmValue?.(draft.trim());
-          }}
-          className={`inline-flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-40 ${
-            highlight.tone === 'edited'
-              ? 'bg-emerald-500 text-white ring-2 ring-emerald-300/50'
-              : 'bg-emerald-500 text-white hover:bg-emerald-400'
-          }`}
-        >
-          {confirming ? (
-            <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
-          ) : (
+        <div className="mt-2 flex items-center justify-end gap-2 border-t border-white/10 pt-2">
+          <button
+            type="button"
+            title="Clear value"
+            disabled={!pickMode || confirming}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onClearValue?.();
+            }}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
+          >
+            <TrashIcon />
+          </button>
+          <button
+            type="button"
+            title="Save and go to next"
+            disabled={!canSave}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onConfirmValue?.(draft.trim());
+            }}
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-40 ${
+              highlight.tone === 'edited'
+                ? 'bg-emerald-500 text-white ring-2 ring-emerald-300/50'
+                : 'bg-emerald-500 text-white hover:bg-emerald-400'
+            }`}
+          >
+            {/* Never spin on ✓ — save is optimistic; spinner made cell confirm feel slow. */}
             <CheckIcon />
-          )}
-        </button>
+          </button>
+        </div>
       </div>
     </div>
   );

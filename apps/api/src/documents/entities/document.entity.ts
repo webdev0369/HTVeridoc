@@ -45,6 +45,11 @@ export class Document {
   })
   documentType!: DocumentType;
 
+  /** Rossum-style document queue (null = unassigned / legacy). */
+  @Column({ name: 'queue_id', type: 'uuid', nullable: true })
+  @Index()
+  queueId!: string | null;
+
   @Column({
     type: 'varchar',
     length: 64,

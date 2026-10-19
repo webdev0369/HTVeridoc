@@ -24,6 +24,7 @@ export function isNumericLineColumn(column: LineReviewColumn): boolean {
     column === 'pricePerBaseUnit' ||
     column === 'stockTakingQuantityPerBaseMeasurementUnit' ||
     column === 'discount' ||
+    column === 'vat' ||
     column === 'amount'
   );
 }

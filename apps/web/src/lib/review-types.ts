@@ -18,6 +18,7 @@ export const LINE_REVIEW_COLUMNS = [
   'pricePerBaseUnit',
   'stockTakingQuantityPerBaseMeasurementUnit',
   'discount',
+  'vat',
   'amount',
 ] as const;
 
@@ -38,6 +39,7 @@ export const LINE_REVIEW_COLUMN_LABELS: Record<LineReviewColumn, string> = {
   pricePerBaseUnit: 'Price / base',
   stockTakingQuantityPerBaseMeasurementUnit: 'ST qty / base',
   discount: 'Disc.',
+  vat: 'VAT %',
   amount: 'Total amount',
 };
 
@@ -132,6 +134,8 @@ export function getLineColumnValue(
       return numStr(line.stockTakingQuantityPerBaseMeasurementUnit);
     case 'discount':
       return numStr(line.discount);
+    case 'vat':
+      return numStr(line.vat);
     case 'amount':
       return numStr(line.amount);
   }
@@ -176,6 +180,8 @@ export function lineColumnToPatch(
       return { stockTakingQuantityPerBaseMeasurementUnit: asNum() };
     case 'discount':
       return { discount: asNum() };
+    case 'vat':
+      return { vat: asNum() };
     case 'amount':
       return { amount: asNum() };
   }
@@ -202,6 +208,7 @@ export function highlightRoleForColumn(column: LineReviewColumn): HighlightRole 
     case 'stocktakingUnitPrice':
     case 'pricePerBaseUnit':
     case 'discount':
+    case 'vat':
     case 'amount':
       return 'price';
     case 'purchaseUnit':

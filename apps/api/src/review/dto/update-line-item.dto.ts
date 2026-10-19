@@ -103,6 +103,11 @@ export class UpdateLineItemDto {
   @IsOptional()
   @IsString()
   @MaxLength(64)
+  vat?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
   amount?: string | null;
 
   @IsOptional()

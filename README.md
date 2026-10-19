@@ -156,16 +156,23 @@ Example configs: API [`railway.toml`](railway.toml) (`healthcheckPath = /health`
 | POST | `/users` | Add org member (`user.manage`) |
 | PATCH | `/users/:id/role` | Change role (`user.manage`) |
 | PATCH | `/users/:id/status` | Enable/disable (`user.manage`) |
-| POST | `/documents` | multipart `file` PDF |
-| GET | `/documents` | Paginated list |
+| POST | `/documents` | multipart `file` PDF (+ optional `queueId`) |
+| GET | `/documents` | Paginated list (optional `queueId`; membership-scoped) |
 | GET | `/documents/:id` | Metadata |
 | GET | `/documents/:id/file` | Authenticated PDF stream |
+| PATCH | `/documents/:id/queue` | Assign / clear document queue |
 | DELETE | `/documents/:id` | Soft-delete |
-| POST | `/documents/:id/process` | Enqueue Gemini extraction (`ai-extraction` queue) |
+| POST | `/documents/:id/process` | Enqueue Gemini extraction (`ai-extraction` job queue) |
 | GET | `/documents/:id/extraction` | Latest extraction result |
 | GET | `/ai/requests` | AI token/cost tracking |
-| GET | `/queue/jobs` | List recent BullMQ jobs (`queue.read`) |
+| GET | `/document-queues` | List Rossum-style document queues (`queue.read`) |
+| POST | `/document-queues` | Create queue (`queue.manage`) |
+| PATCH | `/document-queues/:id` | Update queue / members (`queue.manage`) |
+| DELETE | `/document-queues/:id` | Archive queue (`queue.manage`) |
+| GET | `/queue/jobs` | List recent BullMQ background jobs (`queue.read`) |
 | POST | `/queue/jobs/:queueName/:jobId/retry` | Retry failed job (`queue.manage`) |
+
+**Queues vs jobs:** Settings → **Queue Manager** configures document workflow queues (type, members, inbox). Settings → **Background Jobs** is the BullMQ ops view for extraction/export workers.
 
 ### Phase 4 — Gemini
 

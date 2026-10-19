@@ -54,7 +54,10 @@ interface ReviewEditorProps {
   editable: boolean;
   selection: ReviewSelection;
   onSelect: (selection: ReviewSelection) => void;
-  onSaveField: (fieldId: string, currentValue: string | null) => Promise<void>;
+  onSaveField: (
+    fieldId: string,
+    currentValue: string | null,
+  ) => void | Promise<void>;
   saving?: boolean;
   footer?: React.ReactNode;
 }

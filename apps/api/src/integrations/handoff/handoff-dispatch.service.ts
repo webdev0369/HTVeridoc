@@ -167,6 +167,8 @@ export class HandoffDispatchService {
         stockTakingQuantityPerPurchaseUnit:
           l.stockTakingQuantityPerPurchaseUnit,
         unitPrice: l.unitPrice,
+        discount: l.discount,
+        vat: l.vat,
         amount: l.amount,
       })),
     };
