@@ -6,6 +6,7 @@ import { QueueAdminService } from './queue-admin.service';
 import {
   QUEUE_ENABLED,
   checkRedisBullMqCompat,
+  redisConnectionFromUrl,
 } from './redis-compat';
 
 @Module({})
@@ -44,13 +45,12 @@ export class QueueModule {
           imports: [ConfigModule],
           inject: [ConfigService],
           useFactory: (config: ConfigService) => {
-            const url = new URL(
+            const base = redisConnectionFromUrl(
               config.get<string>('REDIS_URL', 'redis://localhost:6379'),
             );
             return {
               connection: {
-                host: url.hostname,
-                port: Number(url.port || 6379),
+                ...base,
                 maxRetriesPerRequest: null,
                 enableOfflineQueue: true,
                 lazyConnect: true,

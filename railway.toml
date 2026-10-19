@@ -11,6 +11,7 @@ dockerfilePath = "apps/api/Dockerfile"
 # Also clears any Railway UI / Nixpacks start command that would override the image ENTRYPOINT.
 startCommand = "/entrypoint.sh"
 healthcheckPath = "/health"
-healthcheckTimeout = 40
+# Free/hobby: serverless cold start + Postgres wake + migrations need headroom.
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 5
+restartPolicyMaxRetries = 10

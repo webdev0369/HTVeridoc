@@ -7,7 +7,7 @@ import { PermissionCode, RoleCode } from '../../common/enums';
 import { Document } from '../../documents/entities/document.entity';
 
 const DEFAULT_TTL_SECONDS = 7 * 24 * 60 * 60;
-const MAX_TTL_SECONDS = 30 * 24 * 60 * 60;
+const MAX_TTL_SECONDS = 30 * 24 * 60 * 60; 
 
 export interface EditorLinkResult {
   token: string;
@@ -52,7 +52,7 @@ export class EditorLinkService {
     const ttl = Math.min(
       Math.max(expiresInSeconds ?? DEFAULT_TTL_SECONDS, 60),
       MAX_TTL_SECONDS,
-    );
+    ); //
     const expiresAt = new Date(Date.now() + ttl * 1000);
 
     const token = await this.jwt.signAsync(

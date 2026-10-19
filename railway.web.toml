@@ -11,6 +11,7 @@ dockerfilePath = "apps/web/Dockerfile"
 # Do not set a publish directory — this is a Next.js standalone server, not a static site.
 startCommand = "node apps/web/server.js"
 healthcheckPath = "/"
-healthcheckTimeout = 40
+# Free/hobby: serverless cold starts need headroom.
+healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 5
+restartPolicyMaxRetries = 10

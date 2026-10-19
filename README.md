@@ -107,7 +107,7 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 | Service | Source | Notes |
 |---------|--------|--------|
 | Postgres | Railway plugin | Set `DATABASE_URL` on API |
-| Redis | Railway plugin | Set `REDIS_URL` on API (BullMQ; Redis 5+) |
+| Redis | Empty service + Docker image `redis:7-alpine` (no volume) **or** Upstash | Free plan allows **1 volume** (use it for Postgres). Do **not** use Bitnami/Redis templates that attach a second volume. Set `REDIS_URL` on API (BullMQ; Redis 5+). Ephemeral Redis is fine for queues. |
 | API | Dockerfile `apps/api/Dockerfile` or root [`railway.toml`](railway.toml) | Migrations run on boot via `docker/api-entrypoint.sh`. Start command must be `/entrypoint.sh` (not `pnpm …`) — the runtime image has no pnpm. |
 | Web | Dockerfile `apps/web/Dockerfile` or [`railway.web.toml`](railway.web.toml) | Build with `NEXT_PUBLIC_API_URL` = public API URL. Start command must be `node apps/web/server.js` (not `npm`/`pnpm`). No publish directory. If using Nixpacks instead, start stays `pnpm --filter @htveridoc/web start` — do not use `next start` with Docker standalone output. |
 

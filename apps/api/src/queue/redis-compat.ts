@@ -1,4 +1,4 @@
-import Redis from 'ioredis';
+import Redis, { type RedisOptions } from 'ioredis';
 
 export const QUEUE_ENABLED = 'QUEUE_ENABLED';
 export const MIN_REDIS_MAJOR = 5;
@@ -7,6 +7,19 @@ export interface RedisCompatResult {
   ok: boolean;
   version: string | null;
   reason?: string;
+}
+
+/** BullMQ / ioredis connection from REDIS_URL (supports Upstash `rediss://`). */
+export function redisConnectionFromUrl(redisUrl: string): RedisOptions {
+  const url = new URL(redisUrl);
+  const useTls = url.protocol === 'rediss:';
+  return {
+    host: url.hostname,
+    port: Number(url.port || 6379),
+    username: url.username || undefined,
+    password: url.password ? decodeURIComponent(url.password) : undefined,
+    ...(useTls ? { tls: {} } : {}),
+  };
 }
 
 let cached: RedisCompatResult | null = null;
