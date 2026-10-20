@@ -10,7 +10,8 @@ dockerfilePath = "apps/web/Dockerfile"
 # Must not use npm/pnpm: the runner image has no package manager (node only).
 # Do not set a publish directory — Next.js standalone server, not a static site.
 startCommand = "node apps/web/server.js"
-healthcheckPath = "/"
+# `/` redirects to /dashboard (307) — Railway healthchecks require 2xx.
+healthcheckPath = "/health"
 healthcheckTimeout = 300
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

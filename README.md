@@ -109,7 +109,7 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 | Postgres | Railway plugin | Set `DATABASE_URL` on API |
 | Redis | Empty service + Docker image `redis:7-alpine` (no volume) **or** Upstash | Free plan allows **1 volume** (use it for Postgres). Do **not** use Bitnami/Redis templates that attach a second volume. Set `REDIS_URL` on API (BullMQ; Redis 5+). Ephemeral Redis is fine for queues. |
 | API | Dockerfile `apps/api/Dockerfile` + [`railway.api.toml`](railway.api.toml) | Config-as-code path **must** be `railway.api.toml` (not a root `railway.toml` — that gets applied to every service and breaks web). Migrations on boot via `/entrypoint.sh`. |
-| Web | Dockerfile `apps/web/Dockerfile` + [`railway.web.toml`](railway.web.toml) | Config-as-code path **must** be `railway.web.toml`. Build with `NEXT_PUBLIC_API_URL` (include `https://`). Start: `node apps/web/server.js`. No publish directory. |
+| Web | Dockerfile `apps/web/Dockerfile` + [`railway.web.toml`](railway.web.toml) | Config-as-code path **must** be `railway.web.toml`. Build with `NEXT_PUBLIC_API_URL` (include `https://`). Start: `node apps/web/server.js`. Healthcheck: `/health` (not `/` — home redirects and fails Railway’s 2xx check). |
 
 **API listen port:** Railway injects `PORT`. The API uses `PORT` when set, otherwise `API_PORT` (default `3001`). Health check: `GET /health`.
 
