@@ -1,6 +1,8 @@
 # Railway config for the API service only.
-# Do NOT name this railway.toml — Railway auto-applies root railway.toml to every
-# service and would build the API image for @htveridoc/web (healthcheck / fails).
+#
+# NEVER add a root file named railway.toml in this monorepo.
+# Railway auto-loads railway.toml onto EVERY service; web then builds apps/api
+# and crashes (no DATABASE_URL) → healthcheck failure / "Crashed".
 #
 # In Railway: Settings → Config-as-code → file path = railway.api.toml
 # Attach a persistent volume to the API at STORAGE_ROOT (e.g. /data/storage) when available.
