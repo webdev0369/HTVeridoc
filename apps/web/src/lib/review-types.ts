@@ -73,6 +73,8 @@ export type ReviewSelection =
       /** Optional PDF label hints (e.g. Ordredato for orderDate). */
       anchorHints?: string[];
       tone: HighlightTone;
+      /** Bumps on every PDF pick so same-text re-picks still refresh UI. */
+      pickAt?: number;
     }
   | {
       type: 'line';
@@ -86,6 +88,8 @@ export type ReviewSelection =
       /** Position / item code — keep PDF highlight on this row when value repeats. */
       anchorHints?: string[];
       tone: HighlightTone;
+      /** Bumps on every PDF pick so same-text re-picks still refresh UI. */
+      pickAt?: number;
     }
   | null;
 

@@ -665,15 +665,16 @@ function findValueBoxes(
     const inBand = scored.filter(
       (s) => Math.abs(boxCenterY(s.box) - preferredY) <= band,
     );
-    // Stay on the anchored row when possible. If the AI bbox/`near` Y is
-    // wrong (e.g. header), do NOT return [] — that parked the float at the
-    // top of the page. Prefer the best text match on the page instead.
+    // Stay on the anchored row when possible.
     if (inBand.length > 0) return [rankNear(inBand)[0].box];
     if (fromAnchorY != null) {
       const anchorBand = scored.filter(
         (s) => Math.abs(boxCenterY(s.box) - fromAnchorY) <= band,
       );
       if (anchorBand.length > 0) return [rankNear(anchorBand)[0].box];
+      // Do not fall back to a page-wide substring hit — similar product
+      // names (e.g. "Habanero Hot" vs "Habanero Hotsauce") steal the ring.
+      return [];
     }
     // Stale AI bbox only — don't pull toward a wrong Y.
     return [rankScore(scored)[0].box];
@@ -770,6 +771,18 @@ function findDateValueBoxes(
   return [hits[0].box];
 }
 
+function boxNearAnchorRow(
+  box: BoundingBox,
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): boolean {
+  const anchorY = findAnchorY(textItems, hints);
+  if (anchorY == null) return false;
+  // Multi-line product names sit below the Varenr — allow a taller band.
+  const band = Math.max(0.06, (box.height || 0.02) * 2.5);
+  return Math.abs(boxCenterY(box) - anchorY) <= band;
+}
+
 /** Product-name box on the same PDF row as this line's item code. */
 function descriptionBandOnAnchorRow(
   textItems: PdfTextItem[],
@@ -778,17 +791,6 @@ function descriptionBandOnAnchorRow(
   const seed = descriptionSeedOnArticleRow(textItems, hints);
   if (!seed) return null;
   return expandDescriptionPick(seed, textItems).box;
-}
-
-function boxNearAnchorRow(
-  box: BoundingBox,
-  textItems: PdfTextItem[],
-  hints: string[] | null | undefined,
-): boolean {
-  const anchorY = findAnchorY(textItems, hints);
-  if (anchorY == null) return true;
-  const band = 0.045;
-  return Math.abs(boxCenterY(box) - anchorY) <= band;
 }
 
 /** Resolve highlight / popup anchor for a selection on a page. */
@@ -803,45 +805,63 @@ function resolveHighlightBoxes(
   const isDescription = role === 'text';
 
   // Dates: normalize in storage (ISO) but locate the printed form on the PDF.
-  const dateParts = parseDateParts(rawValue);
-  if (dateParts) {
-    const dateBoxes = findDateValueBoxes(textItems, dateParts, {
-      near: highlight.boundingBox,
-      anchorHints: highlight.anchorHints,
-    });
-    if (dateBoxes.length > 0) return dateBoxes;
+  // Skip for description role — a bad description like "11.08.2026 Fisketorget…"
+  // must not paint a green ring on a header date or another product row.
+  if (!isDescription) {
+    const dateParts = parseDateParts(rawValue);
+    if (dateParts) {
+      const dateBoxes = findDateValueBoxes(textItems, dateParts, {
+        near: highlight.boundingBox,
+        anchorHints: highlight.anchorHints,
+      });
+      if (dateBoxes.length > 0) return dateBoxes;
+    }
   }
 
-  // Description: keep the ring on this line's product name — never on Varenr.
-  if (isDescription && highlight.anchorHints?.length) {
-    const fromText = findValueBoxes(textItems, highlight.value, {
-      near: highlight.boundingBox,
-      anchorHints: highlight.anchorHints,
-    });
-    if (
-      fromText.length > 0 &&
-      boxNearAnchorRow(fromText[0], textItems, highlight.anchorHints)
-    ) {
-      return fromText;
-    }
-    const onRow = descriptionBandOnAnchorRow(
-      textItems,
-      highlight.anchorHints,
-    );
-    if (onRow) return [onRow];
+  // Description: keep the ring on this line's product name — never on a
+  // similar product above/below. Prefer a fresh PDF pick (trust the click),
+  // then text on the article row, then expand from the item-code row.
+  if (isDescription) {
     if (
       highlight.boundingBox &&
-      boxNearAnchorRow(
-        highlight.boundingBox,
-        textItems,
-        highlight.anchorHints,
-      )
+      highlight.boundingBox.width < 0.5 &&
+      highlight.tone === 'edited'
     ) {
       return [highlight.boundingBox];
     }
-    // Stale value from another row — still prefer this row's name band above.
-    if (fromText.length > 0) return fromText;
-    if (highlight.boundingBox) return [highlight.boundingBox];
+    if (highlight.anchorHints?.length) {
+      const fromText = findValueBoxes(textItems, highlight.value, {
+        near: highlight.boundingBox,
+        anchorHints: highlight.anchorHints,
+      });
+      if (
+        fromText.length > 0 &&
+        fromText[0].width < 0.5 &&
+        boxNearAnchorRow(fromText[0], textItems, highlight.anchorHints)
+      ) {
+        return fromText;
+      }
+      const onRow = descriptionBandOnAnchorRow(
+        textItems,
+        highlight.anchorHints,
+      );
+      if (onRow) return [onRow];
+      if (
+        highlight.boundingBox &&
+        highlight.boundingBox.width < 0.5 &&
+        boxNearAnchorRow(
+          highlight.boundingBox,
+          textItems,
+          highlight.anchorHints,
+        )
+      ) {
+        return [highlight.boundingBox];
+      }
+      return [];
+    }
+    if (highlight.boundingBox && highlight.boundingBox.width < 0.5) {
+      return [highlight.boundingBox];
+    }
     return [];
   }
 
@@ -912,31 +932,31 @@ function resolveHighlightBoxes(
 }
 
 /**
- * Park the edit popup clear of the highlight so the printed value stays
- * visible and clickable. Prefer below the row (line amounts), else beside.
+ * Park the edit popup at the found text — left edge, immediately below
+ * (or above if no room). Avoid centering far away from the match.
  */
 function popupPositionStyle(box: BoundingBox): CSSProperties {
   const boxLeft = box.x * 100;
   const boxRight = (box.x + box.width) * 100;
   const boxTop = box.y * 100;
   const boxBottom = (box.y + box.height) * 100;
-  const boxCenterX = (box.x + box.width / 2) * 100;
 
   const spaceBelow = 100 - boxBottom;
   const spaceAbove = boxTop;
   const spaceRight = 100 - boxRight;
   const spaceLeft = boxLeft;
   const sideRoom = 26;
+  const leftPct = Math.min(Math.max(boxLeft, 2), 58);
 
-  // Prefer below/above so the highlighted number is never under the panel.
-  if (spaceBelow >= 20 || spaceAbove >= 20) {
-    const placeBelow = spaceBelow >= 18 || spaceBelow >= spaceAbove;
+  // Prefer below/above so the highlighted value stays visible and clickable.
+  if (spaceBelow >= 14 || spaceAbove >= 14) {
+    const placeBelow = spaceBelow >= 12 || spaceBelow >= spaceAbove;
     return {
-      left: `${Math.min(Math.max(boxCenterX, 16), 84)}%`,
+      left: `${leftPct}%`,
       top: placeBelow ? `${boxBottom}%` : `${boxTop}%`,
       transform: placeBelow
-        ? 'translate(-50%, 14px)'
-        : 'translate(-50%, calc(-100% - 14px))',
+        ? 'translate(0, 8px)'
+        : 'translate(0, calc(-100% - 8px))',
     };
   }
 
@@ -947,6 +967,17 @@ function popupPositionStyle(box: BoundingBox): CSSProperties {
     transform: placeRight
       ? 'translate(10px, 0)'
       : 'translate(calc(-100% - 10px), 0)',
+  };
+}
+
+/** Fallback when no PDF box is known yet. */
+function popupDockStyle(): CSSProperties {
+  return {
+    right: '12px',
+    bottom: '12px',
+    left: 'auto',
+    top: 'auto',
+    transform: 'none',
   };
 }
 
@@ -1414,6 +1445,11 @@ export function PdfViewer({
                       type="button"
                       title={item.str}
                       disabled={!textPickEnabled}
+                      // Prevent input blur (table/popup) from eating the click —
+                      // otherwise description picks look like they "do nothing".
+                      onMouseDown={(e) => {
+                        if (textPickEnabled) e.preventDefault();
+                      }}
                       onClick={(e) => {
                         e.stopPropagation();
                         if (!textPickEnabled) return;
@@ -1438,16 +1474,28 @@ export function PdfViewer({
                         }
                         if (!onValuePick) return;
                         if (appendPickHint) {
-                          // Lock to this line's article row so a click on the
-                          // product above/below cannot steal the wrong name.
+                          // Expand the clicked product name (replace). Fall back
+                          // to the raw glyph if expand yields nothing.
                           const expanded = expandDescriptionPickForLine(
                             seed,
                             pageView.textItems,
                             highlight?.anchorHints,
                           );
-                          onValuePick(expanded.text, expanded.box, {
-                            append: e.shiftKey,
-                          });
+                          const text =
+                            expanded.text.trim() || seed.str.trim();
+                          if (!text) return;
+                          onValuePick(
+                            text,
+                            expanded.text.trim()
+                              ? expanded.box
+                              : {
+                                  x: seed.x,
+                                  y: seed.y,
+                                  width: seed.width,
+                                  height: seed.height,
+                                },
+                            { append: e.shiftKey },
+                          );
                           return;
                         }
                         onValuePick(
@@ -1542,7 +1590,7 @@ function HighlightPopup({
 
   useEffect(() => {
     setDraft(highlight.value ?? '');
-  }, [highlight.value, highlight.label, highlight.page]);
+  }, [highlight.value, highlight.label, highlight.page, highlight.boundingBox]);
 
   // Allow confirm with empty value so optional line cells can be skipped.
   const canSave = pickMode && !confirming;
@@ -1553,9 +1601,7 @@ function HighlightPopup({
     <div
       className="pointer-events-none absolute z-30 w-[240px] max-w-[min(240px,calc(100%-16px))] rounded-xl bg-[#1a2230]/95 p-2.5 text-white shadow-2xl ring-1 ring-[#3b82f6]/50 backdrop-blur-[2px]"
       style={
-        anchorBox
-          ? popupPositionStyle(anchorBox)
-          : { right: '12px', bottom: '12px', left: 'auto', top: 'auto' }
+        anchorBox ? popupPositionStyle(anchorBox) : popupDockStyle()
       }
     >
       {/* Only input + actions capture clicks — labels pass through so PDF

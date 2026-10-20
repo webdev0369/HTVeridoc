@@ -3,14 +3,34 @@ import type { BoundingBox } from '@/lib/types';
 
 /** Fee / delivery / totals — not part of the product name. */
 const STOP_LINE =
-  /^(forventet\s+levering|miljøvederlag|miljovederlag|environment(al)?\s+fee|moms\b|mva\b|sum\b|total\b|frakt\b)/i;
+  /^(forventet\s+levering|miljøvederlag|miljovederlag|environment(al)?\s+fee|moms\b|mva\b|sum\b|total\b|frakt\b)$/i;
 
-/** Table / column headers that must never enter the description. */
-const HEADER_LINE =
-  /^(produktnavn|beskrivelse|artikkel(?:\/beskrivelse)?|art\.?nr\.?|description|item\s*name|varetekst|pos\.?|kvt\.?|pakning|pris|enh\.?|rab\.?|beløp)$/i;
+/**
+ * Single PDF table-header tokens (Varenr, Antall, Enhet, …).
+ * These often get OCR'd as a fake "description" when the wrong row is clicked
+ * or the model reads the header band — e.g. "Antall Enhet Sum mva. inkl".
+ */
+const HEADER_TOKEN =
+  /^(varenr\.?|produktnavn|beskrivelse|artikkel(?:\/beskrivelse)?|art\.?nr\.?|description|item\s*name|varetekst|pos\.?|antall|enhet|enh\.?|kvt\.?|pakning|pris|rab\.?|beløp|sum|mva\.?|inkl\.?|moms|quantity|unit|price|amount|total)$/i;
+
+/** Whole-line header (legacy single-cell headers). */
+const HEADER_LINE = HEADER_TOKEN;
 
 /** New table row starting with Pos + article, e.g. "20 343769". */
 const NEW_POS_ARTICLE = /^\d{1,4}\s+\d{3,}/;
+
+/** True if text is only table headers glued together (not a real product name). */
+export function looksLikeTableHeaderNoise(text: string): boolean {
+  const parts = text
+    .trim()
+    .split(/\s+/)
+    .map((p) => p.replace(/[.,:;]+$/g, ''))
+    .filter(Boolean);
+  if (!parts.length) return false;
+  const headerish = parts.filter((p) => HEADER_TOKEN.test(p));
+  // Most/all tokens are column titles → not a product description.
+  return headerish.length >= 2 && headerish.length >= parts.length * 0.6;
+}
 
 function sameVisualLine(a: PdfTextItem, b: PdfTextItem) {
   return Math.abs(b.y - a.y) <= Math.max(a.height, b.height, 0.012) * 1.6;
@@ -26,6 +46,19 @@ function isPosOrArticleToken(str: string) {
   if (/^\d{1,3}$/.test(t)) return true;
   if (/^\d{4,}$/.test(t)) return true;
   if (/^\d{4,}(?:\s+\d+)+$/.test(t)) return true;
+  return false;
+}
+
+/** Enh / Kvt / Pris / Beløp cells — must not widen the description highlight. */
+function isQtyPriceColumnToken(str: string) {
+  const t = str.trim();
+  if (!t) return true;
+  // Prices / amounts: 12,50 · 1 234,00 · 754.90
+  if (/^\d{1,3}(?:[ .\u00a0]\d{3})*[.,]\d{2}$/.test(t)) return true;
+  if (/^\d+[.,]\d{2}$/.test(t)) return true;
+  // Standalone pack / unit codes (not "1kg" glued into a name)
+  if (/^(stk|pk|pkg|pcs|ea|krt|eske|pakning|enh\.?)$/i.test(t)) return true;
+  if (/^\d+%$/.test(t)) return true;
   return false;
 }
 
@@ -58,34 +91,70 @@ function joinLineItems(items: PdfTextItem[]) {
     .trim();
 }
 
+/**
+ * Keep only product-name glyphs on a visual line.
+ * Stops before Enh/Kvt/Pris/Beløp so multi-line descriptions do not highlight
+ * the entire table row.
+ */
 function filterLineForDescription(
   rawLine: PdfTextItem[],
   seed: PdfTextItem,
   isSeedLine: boolean,
+  bandRight: number,
 ): PdfTextItem[] {
   const seedLeft = seed.x;
+  const sorted = [...rawLine].sort((a, b) => a.x - b.x);
+
   if (isSeedLine) {
-    // Same line: take the clicked fragment and text to its right (full name).
-    return rawLine.filter((item) => {
-      if (isPosOrArticleToken(item.str) && item.x < seedLeft - 0.005) {
-        return false;
+    const out: PdfTextItem[] = [];
+    let started = false;
+    for (const item of sorted) {
+      const t = item.str.trim();
+      if (!t) continue;
+      // Left of click: skip Pos / Art.nr only.
+      if (item.x + item.width < seedLeft - 0.01) {
+        if (isPosOrArticleToken(t)) continue;
+        // Allow a little overlap from the left edge of the name.
+        if (item.x + item.width < seedLeft - 0.02) continue;
       }
-      if (item.x >= seedLeft - 0.008) return true;
-      if (sameVisualLine(item, seed) && !isPosOrArticleToken(item.str)) {
-        return item.x + item.width >= seedLeft - 0.01;
+      if (item.x > bandRight) break;
+      if (isQtyPriceColumnToken(t) && item.x > seedLeft + 0.04) break;
+      if (isPosOrArticleToken(t) && item.x < seedLeft - 0.005) continue;
+      // After we have name text, a large jump right usually means next column.
+      if (
+        started &&
+        out.length &&
+        item.x - (out[out.length - 1].x + out[out.length - 1].width) > 0.045
+      ) {
+        break;
       }
-      return false;
-    });
+      if (item.x >= seedLeft - 0.01 || item.x + item.width >= seedLeft - 0.01) {
+        started = true;
+        out.push(item);
+      }
+    }
+    return out;
   }
-  return rawLine.filter(
-    (item) => !isPosOrArticleToken(item.str) || item.x >= seedLeft,
-  );
+
+  // Continuation lines (dimensions, brand): same X band as the name, no prices.
+  return sorted.filter((item) => {
+    const t = item.str.trim();
+    if (!t || HEADER_LINE.test(t)) return false;
+    if (item.x > bandRight) return false;
+    if (item.x + item.width < seedLeft - 0.02) return false;
+    if (isQtyPriceColumnToken(t)) return false;
+    if (isPosOrArticleToken(t) && item.x < seedLeft) return false;
+    return true;
+  });
 }
 
 function shouldStopLine(text: string) {
   const t = text.trim();
   return (
-    STOP_LINE.test(t) || HEADER_LINE.test(t) || NEW_POS_ARTICLE.test(t)
+    STOP_LINE.test(t) ||
+    HEADER_LINE.test(t) ||
+    looksLikeTableHeaderNoise(t) ||
+    NEW_POS_ARTICLE.test(t)
   );
 }
 
@@ -103,6 +172,18 @@ function rowHasCodeToTheLeft(
   });
 }
 
+/** True if this visual row has a Varenr-like code anywhere (another product row). */
+function rowHasItemCode(
+  pageItems: PdfTextItem[],
+  lineY: number,
+  lineHeight: number,
+) {
+  return pageItems.some((item) => {
+    if (!sameVisualLineY(lineY, lineHeight, item)) return false;
+    return /^\d{4,}(?:\s+\d+)*$/.test(item.str.trim());
+  });
+}
+
 function normalizeArticle(s: string) {
   return s.replace(/\s+/g, ' ').trim().toLowerCase();
 }
@@ -114,24 +195,6 @@ function primaryArticleHint(hints: string[] | null | undefined): string | null {
     .filter((h) => h.length >= 3)
     .sort((a, b) => b.length - a.length);
   return ranked[0] ?? null;
-}
-
-/** Article / pos tokens on the same visual row, left of `leftOfX`. */
-function articleTokensOnRow(
-  pageItems: PdfTextItem[],
-  lineY: number,
-  lineHeight: number,
-  leftOfX: number,
-): string[] {
-  return pageItems
-    .filter(
-      (item) =>
-        sameVisualLineY(lineY, lineHeight, item) &&
-        item.x < leftOfX - 0.01 &&
-        isPosOrArticleToken(item.str),
-    )
-    .map((item) => item.str.trim())
-    .filter(Boolean);
 }
 
 function findArticleItem(
@@ -181,63 +244,20 @@ export function descriptionSeedOnArticleRow(
   return onRow[0] ?? null;
 }
 
-/** Nearest long article code (Varenr) to a click — identifies which product row. */
-function nearestArticleToSeed(
-  pageItems: PdfTextItem[],
-  seed: PdfTextItem,
-): string | null {
-  const seedY = seed.y + seed.height / 2;
-  let best: { code: string; dist: number } | null = null;
-  for (const item of pageItems) {
-    const t = item.str.trim();
-    // Item codes are 4+ digits (or split "8950 07"); skip short Pos.
-    if (!/^\d{4,}(?:\s+\d+)*$/.test(t)) continue;
-    const dist = Math.abs(item.y + item.height / 2 - seedY);
-    // Same row or one wrapped name line away.
-    if (dist > Math.max(seed.height, item.height, 0.012) * 3.2) continue;
-    if (!best || dist < best.dist) {
-      best = { code: t, dist };
-    }
-  }
-  return best?.code ?? null;
-}
-
 /**
- * Description pick locked to the selected line's article row.
- * Clicks on another product row (different Varenr) retarget to this line's
- * product name — avoids Line 4 (40302) taking "French Twist" from 35085.
+ * Description pick from a PDF click.
+ *
+ * Always expand from the clicked glyph. Do **not** retarget to the selected
+ * line's article row — that blocked fixing a wrong description (e.g. Line 2
+ * still showing Line 1's name) when the user clicks the correct product text.
+ * The UI says each click replaces; trust the click. Shift+click appends in the
+ * parent handler.
  */
 export function expandDescriptionPickForLine(
   seed: PdfTextItem,
   pageItems: PdfTextItem[],
-  articleHints?: string[] | null,
+  _articleHints?: string[] | null,
 ): { text: string; box: BoundingBox } {
-  const ourArticle = primaryArticleHint(articleHints);
-  if (!ourArticle) return expandDescriptionPick(seed, pageItems);
-
-  const nearest = nearestArticleToSeed(pageItems, seed);
-  const onForeignRow =
-    nearest != null &&
-    normalizeArticle(nearest) !== normalizeArticle(ourArticle);
-
-  // Also catch same-row left codes when nearest search is ambiguous.
-  const rowArticles = articleTokensOnRow(
-    pageItems,
-    seed.y,
-    seed.height,
-    seed.x + 0.05,
-  );
-  const foreignOnRow = rowArticles.some(
-    (a) =>
-      /^\d{4,}(?:\s+\d+)*$/.test(a) &&
-      normalizeArticle(a) !== normalizeArticle(ourArticle),
-  );
-
-  if (onForeignRow || foreignOnRow) {
-    const retarget = descriptionSeedOnArticleRow(pageItems, articleHints);
-    if (retarget) return expandDescriptionPick(retarget, pageItems);
-  }
-
   return expandDescriptionPick(seed, pageItems);
 }
 
@@ -252,18 +272,20 @@ export function expandDescriptionPick(
   pageItems: PdfTextItem[],
 ): { text: string; box: BoundingBox } {
   const seedLeft = seed.x;
+  // Description column only — never stretch to Enh/Kvt/Pris/Beløp (~full row).
   const bandLeft = seedLeft - 0.015;
-  const bandRight = Math.min(0.92, seedLeft + Math.max(0.22, seed.width * 4));
+  const bandRight = Math.min(0.62, seedLeft + Math.max(0.28, seed.width * 3.2));
   const maxGap = Math.max(seed.height, 0.012) * 2.2;
   const maxExtraLines = 2;
 
   const candidates = pageItems.filter((item) => {
     const t = item.str.trim();
     if (!t) return false;
-    if (HEADER_LINE.test(t)) return false;
+    if (HEADER_TOKEN.test(t)) return false;
+    if (isQtyPriceColumnToken(t) && item.x > seedLeft + 0.05) return false;
     const left = item.x;
     const cx = item.x + item.width / 2;
-    return left >= bandLeft - 0.02 && cx <= bandRight + 0.03;
+    return left >= bandLeft - 0.02 && cx <= bandRight + 0.02;
   });
 
   if (!candidates.length) {
@@ -306,11 +328,22 @@ export function expandDescriptionPick(
 
   const pickedLines: PdfTextItem[][] = [];
 
-  const seedItems = filterLineForDescription(lines[seedLineIdx], seed, true);
+  const seedItems = filterLineForDescription(
+    lines[seedLineIdx],
+    seed,
+    true,
+    bandRight,
+  );
   if (seedItems.length) pickedLines.push(seedItems);
 
+  // Clip continuation lines to the same X span as the primary name.
+  const nameRight = seedItems.length
+    ? Math.max(...seedItems.map((i) => i.x + i.width)) + 0.02
+    : bandRight;
+  const contRight = Math.min(bandRight, Math.max(nameRight, seedLeft + 0.2));
+
   // Walk upward only for tight continuations (e.g. Latin under Norwegian).
-  // Stop if the row above looks like another product (has article/pos to the left).
+  // Never pull the previous product row (any 4+ digit Varenr on that row).
   let lastTop = lines[seedLineIdx][0].y;
   let upCount = 0;
   for (let i = seedLineIdx - 1; i >= 0 && upCount < maxExtraLines; i--) {
@@ -322,11 +355,12 @@ export function expandDescriptionPick(
         lines[i][0].y,
         lines[i][0].height,
         seedLeft,
-      )
+      ) ||
+      rowHasItemCode(pageItems, lines[i][0].y, lines[i][0].height)
     ) {
       break;
     }
-    const items = filterLineForDescription(lines[i], seed, false);
+    const items = filterLineForDescription(lines[i], seed, false, contRight);
     if (!items.length) break;
     const text = joinLineItems(items);
     if (!text || shouldStopLine(text)) break;
@@ -352,11 +386,12 @@ export function expandDescriptionPick(
         lines[i][0].y,
         lines[i][0].height,
         seedLeft,
-      )
+      ) ||
+      rowHasItemCode(pageItems, lines[i][0].y, lines[i][0].height)
     ) {
       break;
     }
-    const items = filterLineForDescription(lines[i], seed, false);
+    const items = filterLineForDescription(lines[i], seed, false, contRight);
     if (!items.length) break;
     const text = joinLineItems(items);
     if (!text || shouldStopLine(text)) break;

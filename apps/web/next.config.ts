@@ -1,4 +1,5 @@
 import type { NextConfig } from 'next';
+import path from 'path';
 
 /**
  * Origins allowed to embed /editor and document review in an iframe
@@ -14,7 +15,11 @@ const nextConfig: NextConfig = {
   // Standalone is for the Docker image (smaller runtime). Railway Nixpacks /
   // `pnpm start` uses `next start`, which does not support standalone output.
   ...(process.env.NEXT_OUTPUT === 'standalone'
-    ? { output: 'standalone' as const }
+    ? {
+        output: 'standalone' as const,
+        // Monorepo: keep standalone layout under apps/web/... so Docker CMD works.
+        outputFileTracingRoot: path.join(__dirname, '../..'),
+      }
     : {}),
   async headers() {
     // CSP frame-ancestors controls who may iframe the PDF/review UI.

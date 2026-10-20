@@ -9,7 +9,8 @@ dockerfilePath = "apps/web/Dockerfile"
 [deploy]
 # Must not use npm/pnpm: the runner image has no package manager (node only).
 # Do not set a publish directory — Next.js standalone server, not a static site.
-startCommand = "node apps/web/server.js"
+# Entrypoint finds standalone server.js (apps/web/server.js or ./server.js).
+startCommand = "/entrypoint.sh"
 # `/` redirects to /dashboard (307) — Railway healthchecks require 2xx.
 healthcheckPath = "/health"
 healthcheckTimeout = 300

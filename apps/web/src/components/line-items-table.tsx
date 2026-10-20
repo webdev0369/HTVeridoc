@@ -511,26 +511,35 @@ export function LineItemsTable({
             </tr>
           </thead>
           <tbody>
-            {lineItems.map((line) => (
+            {lineItems.map((line) => {
+              const rowSelected =
+                selection?.type === 'line' && selection.id === line.id;
+              return (
               <LineRow
                 key={line.id}
                 line={line}
                 editable={editable}
-                selected={
-                  selection?.type === 'line' && selection.id === line.id
-                }
-                selectedColumn={
-                  selection?.type === 'line' && selection.id === line.id
-                    ? selection.column
-                    : null
-                }
+                selected={rowSelected}
+                selectedColumn={rowSelected ? selection.column : null}
+                selectionValue={rowSelected ? selection.value : null}
+                selectionPickAt={rowSelected ? selection.pickAt : undefined}
                 confirmedCells={confirmedCells}
                 showBaseCols={showBaseCols}
                 showBaseContentCol={showBaseContentCol}
                 showStPerBaseCol={showStPerBaseCol}
                 issue={issueByLine.get(line.id)}
                 disabled={saving}
-                onSelectColumn={(column) =>
+                onSelectColumn={(column) => {
+                  // Same cell already active (e.g. input focus after a PDF pick):
+                  // do NOT rebuild selection from line props — that wiped the
+                  // picked value/box so re-applying the extraction name failed.
+                  if (
+                    selection?.type === 'line' &&
+                    selection.id === line.id &&
+                    selection.column === column
+                  ) {
+                    return;
+                  }
                   onSelect({
                     type: 'line',
                     id: line.id,
@@ -547,8 +556,8 @@ export function LineItemsTable({
                           )
                         ? 'edited'
                         : 'ai',
-                  })
-                }
+                  });
+                }}
                 onSave={(patch) => saveLineAndMark(line.id, patch)}
                 onDelete={
                   showActions
@@ -564,7 +573,8 @@ export function LineItemsTable({
                     : undefined
                 }
               />
-            ))}
+              );
+            })}
             {!lineItems.length && (
               <tr>
                 <td
@@ -663,6 +673,8 @@ function LineRow({
   editable,
   selected,
   selectedColumn,
+  selectionValue,
+  selectionPickAt,
   confirmedCells,
   showBaseCols,
   showBaseContentCol,
@@ -677,6 +689,10 @@ function LineRow({
   editable: boolean;
   selected: boolean;
   selectedColumn: LineReviewColumn | null;
+  /** Live value from PDF popup selection (beats stale local draft). */
+  selectionValue?: string | null;
+  /** Changes on every PDF pick — forces sync even when text is unchanged. */
+  selectionPickAt?: number;
   confirmedCells: Set<string>;
   showBaseCols: boolean;
   showBaseContentCol: boolean;
@@ -771,13 +787,80 @@ function LineRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- syncKey captures field values
   }, [syncKey]);
 
+  // PDF popup picks update selection.value immediately — mirror into the
+  // active cell so local draft cannot keep the previous name. selectionPickAt
+  // ensures re-picking the same extraction text still refreshes the cell.
+  useEffect(() => {
+    if (!selectedColumn || selectionValue == null) return;
+    const text = selectionValue;
+    setDirty(false);
+    switch (selectedColumn) {
+      case 'description':
+        setDescription(text);
+        break;
+      case 'articleNumber':
+        setArticleNumber(text);
+        break;
+      case 'purchaseUnit':
+        setPurchaseUnit(text);
+        break;
+      case 'stocktakingUnit':
+        setStocktakingUnit(text);
+        break;
+      case 'baseMeasurementUnit':
+        setBaseUnit(text);
+        break;
+      case 'purchaseQuantity':
+        setPurchaseQty(text);
+        break;
+      case 'unitPrice':
+        setPurchasePrice(text);
+        break;
+      case 'stockTakingQuantity':
+        setStocktakingQty(text);
+        break;
+      case 'stocktakingUnitPrice':
+        setStocktakingPrice(text);
+        break;
+      case 'stockTakingQuantityPerPurchaseUnit':
+        setStPerPu(text);
+        break;
+      case 'baseContentQuantity':
+        setBaseContent(text);
+        break;
+      case 'pricePerBaseUnit':
+        setPricePerBase(text);
+        break;
+      case 'stockTakingQuantityPerBaseMeasurementUnit':
+        setStPerBase(text);
+        break;
+      case 'discount':
+        setDiscount(text);
+        break;
+      case 'vat':
+        setVat(text);
+        break;
+      case 'amount':
+        setAmount(text);
+        break;
+      default:
+        break;
+    }
+  }, [selectedColumn, selectionValue, selectionPickAt]);
+
   const commit = async () => {
     if (!editable || !dirty) return;
 
     // Only send fields that actually changed vs server — never wipe siblings.
+    // Prefer parent line.* when PDF already wrote a newer value (blur race).
     const patch: Partial<ExtractionLineItemDto> = {};
     const nextArticle = articleNumber.trim() || null;
-    const nextDesc = description.trim() || null;
+    const nextDesc =
+      selectedColumn === 'description' &&
+      selectionValue != null &&
+      selectionValue.trim() !== description.trim()
+        ? selectionValue.trim() || null
+        : description.trim() || null;
     const nextPurchaseUnit = purchaseUnit.trim() || null;
     const nextStockUnit = stocktakingUnit.trim() || null;
     const nextBaseUnit = baseUnit.trim() || null;
@@ -869,7 +952,11 @@ function LineRow({
       <input
         value={value}
         disabled={disabled}
-        onFocus={() => onSelectColumn(column)}
+        onFocus={() => {
+          // Avoid re-selecting the active cell — resets PDF pick state.
+          if (selectedColumn === column) return;
+          onSelectColumn(column);
+        }}
         onChange={(e) => {
           set(e.target.value);
           setDirty(true);

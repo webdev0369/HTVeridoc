@@ -44,6 +44,7 @@ import {
   columnMapParseMode,
   type ColumnMapAssignment,
 } from '@/lib/column-map';
+import { looksLikeTableHeaderNoise } from '@/lib/description-pick';
 import { isDateFieldKey, normalizeDateInput } from '@/lib/date-format';
 import {
   buildReviewQueue,
@@ -203,6 +204,9 @@ export default function DocumentDetailPage() {
     key: '',
     count: 0,
   });
+  /** Always-current selection for PDF picks (avoids stale closures). */
+  const selectionRef = useRef<ReviewSelection>(null);
+  selectionRef.current = selection;
   const [dirtyTick, setDirtyTick] = useState(0);
   const [savingDraft, setSavingDraft] = useState(false);
   const [reloadPromptOpen, setReloadPromptOpen] = useState(false);
@@ -819,8 +823,9 @@ export default function DocumentDetailPage() {
         selection.type === 'line'
           ? highlightRoleForColumn(selection.column)
           : undefined,
+      // pickAt is only on selection — include via deps so boxes refresh
     };
-  }, [selection, pdfPage]);
+  }, [selection, pdfPage, selection?.pickAt]);
 
   const handleSelect = (next: ReviewSelection) => {
     if (mapColumn) return; // ignore normal selection while mapping a column
@@ -912,31 +917,43 @@ export default function DocumentDetailPage() {
     box?: { x: number; y: number; width: number; height: number },
     opts?: { append?: boolean },
   ) => {
-    if (!selection || !canEdit || !value.trim()) return;
+    const active = selectionRef.current;
+    if (!active || !canEdit || !value.trim()) return;
     const picked = value.trim();
 
-    if (selection.type === 'field') {
-      const currentValue = normalizeFieldValue(selection, picked);
-      queueFieldEdit(selection.id, currentValue);
+    if (active.type === 'field') {
+      const currentValue = normalizeFieldValue(active, picked);
+      queueFieldEdit(active.id, currentValue);
       setSelection({
-        ...selection,
+        ...active,
         value: currentValue,
         tone: 'edited',
         page: pdfPage,
-        boundingBox: box ?? selection.boundingBox,
+        boundingBox: box ? { ...box } : active.boundingBox,
+        pickAt: Date.now(),
       });
       return;
     }
 
-    if (selection.type === 'line') {
+    if (active.type === 'line') {
+      // Description: never accept PDF table headers as a product name
+      // (e.g. "Antall Enhet Sum mva. inkl").
+      if (
+        active.column === 'description' &&
+        looksLikeTableHeaderNoise(picked)
+      ) {
+        return;
+      }
       // Description: each click replaces with text at that click.
       // Shift+click appends (for rare extra fragments).
       const appendDescription =
-        selection.column === 'description' && Boolean(opts?.append);
+        active.column === 'description' && Boolean(opts?.append);
       let nextText = picked;
       if (appendDescription) {
-        const prev = selection.value?.trim() ?? '';
+        const prev = active.value?.trim() ?? '';
         if (prev) {
+          // Same fragment again while appending — keep prev, but still refresh
+          // the pick box below so the ring updates.
           if (prev === picked || prev.includes(picked)) {
             nextText = prev;
           } else if (picked.includes(prev)) {
@@ -947,26 +964,30 @@ export default function DocumentDetailPage() {
         }
       }
 
+      // Always prefer the new click box so re-picking the *same* extraction
+      // name after an edit still moves/updates the green ring.
       const nextBox =
         appendDescription && box
-          ? mergePickBoxes(selection.boundingBox, box)
-          : (box ?? selection.boundingBox);
+          ? mergePickBoxes(active.boundingBox, box)
+          : (box ?? active.boundingBox);
 
-      const patch = lineColumnToPatch(selection.column, nextText);
-      queueLineEdit(selection.id, patch);
-      if (selection.column !== 'description') {
-        setLineConfirmSignal({
-          lineId: selection.id,
-          column: selection.column,
-          at: Date.now(),
-        });
-      }
+      const patch = lineColumnToPatch(active.column, nextText);
+      queueLineEdit(active.id, patch);
+      const pickedAt = Date.now();
+      setLineConfirmSignal({
+        lineId: active.id,
+        column: active.column,
+        at: pickedAt,
+      });
+      // Always a new selection object + pickAt so re-clicking the *same*
+      // extraction name still refreshes the ring and LineRow draft.
       setSelection({
-        ...selection,
+        ...active,
         value: nextText,
         tone: 'edited',
         page: pdfPage,
-        boundingBox: nextBox,
+        boundingBox: nextBox ? { ...nextBox } : active.boundingBox,
+        pickAt: pickedAt,
       });
     }
   };
