@@ -6,10 +6,18 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 1
 fi
 
-echo "[api] Running database migrations..."
-if ! node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js; then
-  echo "[api] ERROR: migrations failed. Check DATABASE_URL and that Postgres is reachable from this service."
-  exit 1
+SERVICE_NAME="${SERVICE_NAME:-all}"
+echo "[api] SERVICE_NAME=${SERVICE_NAME}"
+
+# Run migrations once (identity slice, or explicitly requested).
+if [ "${RUN_MIGRATIONS:-}" = "true" ] || [ "${SERVICE_NAME}" = "identity" ]; then
+  echo "[api] Running database migrations..."
+  if ! node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js; then
+    echo "[api] ERROR: migrations failed. Check DATABASE_URL and that Postgres is reachable from this service."
+    exit 1
+  fi
+else
+  echo "[api] Skipping migrations (RUN_MIGRATIONS not set / not identity)."
 fi
 
 echo "[api] Starting NestJS..."

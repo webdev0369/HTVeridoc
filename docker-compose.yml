@@ -31,7 +31,8 @@ services:
       timeout: 3s
       retries: 10
 
-  api:
+  # Shared API image — each slice loads a different SERVICE_NAME
+  identity:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -40,19 +41,208 @@ services:
       - .env
     environment:
       NODE_ENV: production
-      API_PORT: 3001
+      SERVICE_NAME: identity
+      API_PORT: 3011
+      RUN_MIGRATIONS: "true"
       DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
       REDIS_URL: redis://redis:6379
       STORAGE_ROOT: /data/storage
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
     volumes:
       - storage_data:/data/storage
-    ports:
-      - "${API_PORT:-3001}:3001"
+    expose:
+      - "3011"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3011/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
     depends_on:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+
+  documents:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: documents
+      API_PORT: 3012
+      DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
+      REDIS_URL: redis://redis:6379
+      STORAGE_ROOT: /data/storage
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+    volumes:
+      - storage_data:/data/storage
+    expose:
+      - "3012"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3012/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    depends_on:
+      identity:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  processing:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: processing
+      API_PORT: 3013
+      DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
+      REDIS_URL: redis://redis:6379
+      STORAGE_ROOT: /data/storage
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+    volumes:
+      - storage_data:/data/storage
+    expose:
+      - "3013"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3013/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    depends_on:
+      identity:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  review:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: review
+      API_PORT: 3014
+      DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
+      REDIS_URL: redis://redis:6379
+      STORAGE_ROOT: /data/storage
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+    volumes:
+      - storage_data:/data/storage
+    expose:
+      - "3014"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3014/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    depends_on:
+      identity:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  integrations:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      SERVICE_NAME: integrations
+      API_PORT: 3015
+      DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
+      REDIS_URL: redis://redis:6379
+      STORAGE_ROOT: /data/storage
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+    volumes:
+      - storage_data:/data/storage
+    expose:
+      - "3015"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3015/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 40s
+    depends_on:
+      identity:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: .
+      dockerfile: apps/gateway/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      GATEWAY_PORT: 3001
+      IDENTITY_URL: http://identity:3011
+      DOCUMENTS_URL: http://documents:3012
+      PROCESSING_URL: http://processing:3013
+      REVIEW_URL: http://review:3014
+      INTEGRATIONS_URL: http://integrations:3015
+    ports:
+      - "${API_PORT:-3001}:3001"
+    depends_on:
+      identity:
+        condition: service_healthy
+      documents:
+        condition: service_healthy
+      processing:
+        condition: service_healthy
+      review:
+        condition: service_healthy
+      integrations:
         condition: service_healthy
 
   web:
@@ -67,7 +257,7 @@ services:
     ports:
       - "${WEB_PORT:-3000}:3000"
     depends_on:
-      api:
+      gateway:
         condition: service_healthy
 
 volumes:

@@ -31,6 +31,7 @@ RUN chmod +x /entrypoint.sh \
   && chown -R nestjs:nodejs /data/storage
 USER nestjs
 EXPOSE 3001
-HEALTHCHECK --interval=30s --timeout=5s --start-period=40s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:3001/health || exit 1
+# Read API_PORT at runtime (Dockerfile ${VAR} is build-time only and breaks curl).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=5 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.API_PORT||3001)+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["/entrypoint.sh"]

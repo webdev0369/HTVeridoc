@@ -17,7 +17,11 @@ export class HealthController {
 
   @Get()
   live() {
-    return { status: 'ok', service: 'htveridoc-api' };
+    return {
+      status: 'ok',
+      service: 'htveridoc-api',
+      slice: process.env.SERVICE_NAME || 'all',
+    };
   }
 
   @Get('ready')

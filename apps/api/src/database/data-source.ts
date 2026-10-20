@@ -3,9 +3,10 @@ import { config as loadEnv } from 'dotenv';
 import { DataSource } from 'typeorm';
 import * as path from 'path';
 
-// Prefer apps/api/.env over repo-root .env (dotenv does not override by default).
+// Load local .env files only for missing keys — never override Docker/Compose
+// env (override:true used to replace postgres://…@postgres with localhost).
 loadEnv({ path: path.resolve(__dirname, '../../../../.env') });
-loadEnv({ path: path.resolve(__dirname, '../../.env'), override: true });
+loadEnv({ path: path.resolve(__dirname, '../../.env') });
 
 export default new DataSource({
   type: 'postgres',

@@ -8,9 +8,13 @@ node_modules
 /storage
 /storage/**
 *.log
+# Never bake local secrets / localhost DB URLs into API images
 .env
 .env.*
+**/.env
+**/.env.*
 !.env.docker.example
+!.**/.env.docker.example
 .turbo
 .idea
 .vscode

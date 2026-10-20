@@ -231,10 +231,10 @@ export function LineItemsTable({
   }, [confirmSignal, markColumnsConfirmed]);
 
   const saveLineAndMark = useCallback(
-    (lineItemId: string, patch: Partial<ExtractionLineItemDto>) => {
+    async (lineItemId: string, patch: Partial<ExtractionLineItemDto>) => {
       // Mark ✓ immediately — parent save is optimistic / fire-and-forget.
       markColumnsConfirmed(lineItemId, columnsFromPatch(patch));
-      void onSaveLine(lineItemId, patch);
+      await onSaveLine(lineItemId, patch);
     },
     [onSaveLine, markColumnsConfirmed],
   );

@@ -2,9 +2,11 @@ import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
+import { resolveServiceName } from './service-name';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
+  const service = resolveServiceName();
+  const app = await NestFactory.create(await AppModule.forRoot(), {
     logger: ['log', 'error', 'warn', 'debug', 'verbose'],
   });
 
@@ -30,7 +32,10 @@ async function bootstrap() {
     Number(process.env.PORT) ||
     config.get<number>('API_PORT', 3001);
   await app.listen(port, '0.0.0.0');
-  Logger.log(`HTVeridoc API listening on http://0.0.0.0:${port}`, 'Bootstrap');
+  Logger.log(
+    `HTVeridoc API [${service}] listening on http://0.0.0.0:${port}`,
+    'Bootstrap',
+  );
 }
 
 bootstrap();

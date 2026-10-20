@@ -6,7 +6,8 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const PORTS = [3000, 3001, 3002];
+// Monolith + gateway + microservice slices (dev-micro)
+const PORTS = [3000, 3001, 3002, 3011, 3012, 3013, 3014, 3015];
 
 function killPort(port) {
   if (process.platform === 'win32') {
@@ -47,10 +48,22 @@ for (const port of PORTS) {
   killPort(port);
 }
 
-const nextDir = path.join(__dirname, '..', 'apps', 'web', '.next');
-try {
-  fs.rmSync(nextDir, { recursive: true, force: true });
-  console.log('[free-dev-ports] cleared apps/web/.next');
-} catch {
-  /* not present or already cleared */
+// Only wipe .next when explicitly asked — wiping while Next is still
+// shutting down causes ENOENT on routes-manifest.json mid-request.
+const cleanNext =
+  process.argv.includes('--clean-next') ||
+  process.env.CLEAN_NEXT === '1';
+if (cleanNext) {
+  // Give killed Next processes a moment to release file locks (Windows).
+  const start = Date.now();
+  while (Date.now() - start < 400) {
+    /* busy wait intentionally short */
+  }
+  const nextDir = path.join(__dirname, '..', 'apps', 'web', '.next');
+  try {
+    fs.rmSync(nextDir, { recursive: true, force: true });
+    console.log('[free-dev-ports] cleared apps/web/.next');
+  } catch {
+    /* not present or already cleared */
+  }
 }

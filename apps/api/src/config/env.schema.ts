@@ -6,6 +6,20 @@ export const envSchema = z.object({
   API_PORT: z.coerce.number().default(3001),
   /** Injected by Railway/Heroku; takes precedence over API_PORT when set. */
   PORT: z.coerce.number().optional(),
+  /**
+   * Microservice slice: all | identity | documents | processing | review | integrations.
+   * Default `all` keeps the monolith for local `pnpm dev`.
+   */
+  SERVICE_NAME: z
+    .enum([
+      'all',
+      'identity',
+      'documents',
+      'processing',
+      'review',
+      'integrations',
+    ])
+    .default('all'),
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().default('redis://localhost:6379'),
   JWT_ACCESS_SECRET: z.string().min(16),

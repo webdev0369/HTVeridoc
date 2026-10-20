@@ -198,7 +198,9 @@ export function ReviewEditor({
                     issue={issueByField.get(field.fieldKey)}
                     disabled={saving}
                     onSelect={() => selectField(field)}
-                    onSave={(value) => onSaveField(field.id, value)}
+                    onSave={async (value) => {
+                      await onSaveField(field.id, value);
+                    }}
                   />
                 ))}
               </div>

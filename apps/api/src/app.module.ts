@@ -1,4 +1,9 @@
-import { Module } from '@nestjs/common';
+import {
+  DynamicModule,
+  ForwardReference,
+  Module,
+  Type,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppConfigModule } from './config/config.module';
@@ -42,61 +47,136 @@ import { ExportProductMapping } from './integrations/export/entities/export-prod
 import { ExportPoMapping } from './integrations/export/entities/export-po-mapping.entity';
 import { HandoffModule } from './integrations/handoff/handoff.module';
 import { WebhookEndpoint } from './integrations/handoff/entities/webhook-endpoint.entity';
+import { resolveServiceName, type ServiceName } from './service-name';
 
-@Module({
-  imports: [
-    AppConfigModule,
-    TypeOrmModule.forRootAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        type: 'postgres' as const,
-        url: config.getOrThrow<string>('DATABASE_URL'),
-        entities: [
-          Organization,
-          User,
-          Role,
-          Permission,
-          OrganizationUser,
-          RefreshToken,
-          Document,
-          DocumentQueue,
-          DocumentQueueMember,
-          Extraction,
-          ExtractionField,
-          ExtractionLineItem,
-          ExtractionSource,
-          DocumentProcessingEvent,
-          AiRequest,
-          ValidationResult,
-          DocumentValidationError,
-          OrganizationDocumentFieldConfig,
-          OrganizationFieldCorrection,
-          ExportConnection,
-          ExportSupplierMapping,
-          ExportProductMapping,
-          ExportPoMapping,
-          WebhookEndpoint,
-        ],
-        synchronize: false,
-        logging: config.get('NODE_ENV') === 'development',
-      }),
-    }),
-    StorageModule,
-    QueueModule.forRootAsync(),
-    HealthModule,
-    AuthModule,
-    OrganizationsModule,
-    UsersModule,
-    AiModule,
-    ExtractionModule,
-    ValidationModule,
-    ExportModule.forRootAsync(),
-    HandoffModule,
-    ReviewModule,
-    FieldConfigModule,
-    DocumentQueuesModule,
-    ProcessingModule.forRootAsync(),
-    DocumentsModule,
-  ],
-})
-export class AppModule {}
+/** Shared Postgres: every slice registers the full entity graph. */
+const ALL_ENTITIES = [
+  Organization,
+  User,
+  Role,
+  Permission,
+  OrganizationUser,
+  RefreshToken,
+  Document,
+  DocumentQueue,
+  DocumentQueueMember,
+  Extraction,
+  ExtractionField,
+  ExtractionLineItem,
+  ExtractionSource,
+  DocumentProcessingEvent,
+  AiRequest,
+  ValidationResult,
+  DocumentValidationError,
+  OrganizationDocumentFieldConfig,
+  OrganizationFieldCorrection,
+  ExportConnection,
+  ExportSupplierMapping,
+  ExportProductMapping,
+  ExportPoMapping,
+  WebhookEndpoint,
+];
+
+@Module({})
+export class AppModule {
+  static async forRoot(): Promise<DynamicModule> {
+    const service = resolveServiceName();
+    const domainImports = await buildDomainImports(service);
+
+    return {
+      module: AppModule,
+      imports: [
+        AppConfigModule,
+        TypeOrmModule.forRootAsync({
+          inject: [ConfigService],
+          useFactory: (config: ConfigService) => ({
+            type: 'postgres' as const,
+            url: config.getOrThrow<string>('DATABASE_URL'),
+            entities: ALL_ENTITIES,
+            synchronize: false,
+            logging: config.get('NODE_ENV') === 'development',
+          }),
+        }),
+        StorageModule,
+        HealthModule,
+        ...domainImports,
+      ],
+    };
+  }
+}
+
+type NestImport =
+  | Type<unknown>
+  | DynamicModule
+  | Promise<DynamicModule>
+  | ForwardReference;
+
+async function buildDomainImports(service: ServiceName): Promise<NestImport[]> {
+  switch (service) {
+    case 'identity':
+      return [AuthModule, OrganizationsModule, UsersModule, FieldConfigModule];
+
+    case 'documents':
+      // DocumentsService injects HandoffDispatchService
+      return [
+        AuthModule,
+        DocumentQueuesModule,
+        FieldConfigModule,
+        HandoffModule,
+        DocumentsModule,
+      ];
+
+    case 'processing':
+      return [
+        AuthModule,
+        QueueModule.forRootAsync(),
+        AiModule,
+        ExtractionModule,
+        DocumentsModule,
+        HandoffModule,
+        ProcessingModule.forRootAsync(),
+      ];
+
+    case 'review':
+      // ReviewService injects HandoffDispatchService
+      return [
+        AuthModule,
+        DocumentsModule,
+        ExtractionModule,
+        FieldConfigModule,
+        OrganizationsModule,
+        ValidationModule,
+        HandoffModule,
+        ReviewModule,
+      ];
+
+    case 'integrations':
+      return [
+        AuthModule,
+        DocumentsModule,
+        ExtractionModule,
+        QueueModule.forRootAsync(),
+        ExportModule.forRootAsync(),
+        HandoffModule,
+      ];
+
+    case 'all':
+    default:
+      return [
+        QueueModule.forRootAsync(),
+        AuthModule,
+        OrganizationsModule,
+        UsersModule,
+        AiModule,
+        ExtractionModule,
+        ValidationModule,
+        ExportModule.forRootAsync(),
+        HandoffModule,
+        ReviewModule,
+        FieldConfigModule,
+        DocumentQueuesModule,
+        ProcessingModule.forRootAsync(),
+        DocumentsModule,
+      ];
+  }
+}

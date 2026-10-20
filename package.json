@@ -5,8 +5,10 @@
   "scripts": {
     "with-node": "node scripts/with-project-node.js",
     "dev": "node scripts/dev.js",
+    "dev:micro": "node scripts/dev-micro.js",
     "dev:api": "node scripts/with-project-node.js pnpm --filter @htveridoc/api dev",
     "dev:web": "node scripts/with-project-node.js pnpm --filter @htveridoc/web dev",
+    "dev:gateway": "node scripts/with-project-node.js pnpm --filter @htveridoc/gateway dev",
     "build": "node scripts/with-project-node.js pnpm -r run build",
     "lint": "node scripts/with-project-node.js pnpm -r run lint",
     "migration:run": "node scripts/with-project-node.js pnpm --filter @htveridoc/api migration:run",
