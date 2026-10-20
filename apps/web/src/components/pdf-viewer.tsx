@@ -15,6 +15,7 @@ import {
   sameCalendarDate,
   type DateParts,
 } from '@/lib/date-format';
+import { expandDescriptionPick } from '@/lib/description-pick';
 import type { BoundingBox } from '@/lib/types';
 
 export type HighlightTone = 'ai' | 'edited' | 'error';
@@ -73,7 +74,11 @@ interface PdfViewerProps {
   highlight?: PdfHighlight | null;
   /** When set, clicking PDF text assigns that value to the active field */
   pickMode?: boolean;
-  onValuePick?: (value: string, box: BoundingBox) => void;
+  onValuePick?: (
+    value: string,
+    box: BoundingBox,
+    opts?: { append?: boolean },
+  ) => void;
   /** Rossum-style: save/confirm value (optional edited text from the popup) */
   onConfirmValue?: (value?: string) => void;
   /** Rossum-style: clear the selected field value */
@@ -83,6 +88,8 @@ interface PdfViewerProps {
   columnMapHint?: string | null;
   onColumnMapSeedPick?: (pick: ColumnMapSeedPick) => void;
   confirming?: boolean;
+  /** Description: expand multi-line product name on click. */
+  appendPickHint?: boolean;
   className?: string;
 }
 
@@ -182,6 +189,40 @@ function numbersEqual(a: number, b: number) {
 
 function boxArea(box: BoundingBox) {
   return box.width * box.height;
+}
+
+/**
+ * Prefer the text item actually under the click. Inflated hit-targets from
+ * neighboring rows (e.g. Mozzarella above French Twist) often steal the event.
+ */
+function resolveTextItemAtClick(
+  pageItems: PdfTextItem[],
+  nx: number,
+  ny: number,
+  fallback: PdfTextItem,
+): PdfTextItem {
+  type Hit = { item: PdfTextItem; area: number; dist: number };
+  const hits: Hit[] = [];
+  for (const item of pageItems) {
+    if (!item.str.trim()) continue;
+    const padY = Math.max(item.height * 0.15, 0.001);
+    const padX = Math.max(item.width * 0.02, 0.001);
+    const left = item.x - padX;
+    const right = item.x + item.width + padX;
+    const top = item.y - padY;
+    const bottom = item.y + item.height + padY;
+    if (nx < left || nx > right || ny < top || ny > bottom) continue;
+    const cx = item.x + item.width / 2;
+    const cy = item.y + item.height / 2;
+    hits.push({
+      item,
+      area: Math.max(item.width, 0.001) * Math.max(item.height, 0.001),
+      dist: (nx - cx) ** 2 + (ny - cy) ** 2,
+    });
+  }
+  if (!hits.length) return fallback;
+  hits.sort((a, b) => a.area - b.area || a.dist - b.dist);
+  return hits[0].item;
 }
 
 function mergeBoxes(items: PdfTextItem[]): BoundingBox {
@@ -862,6 +903,7 @@ export function PdfViewer({
   columnMapHint = null,
   onColumnMapSeedPick,
   confirming = false,
+  appendPickHint = false,
   className = '',
 }: PdfViewerProps) {
   const textPickEnabled = pickMode || columnMapMode;
@@ -1315,21 +1357,46 @@ export function PdfViewer({
                       onClick={(e) => {
                         e.stopPropagation();
                         if (!textPickEnabled) return;
+                        const pageEl = pageElRefs.current.get(pageView.page);
+                        const rect = pageEl?.getBoundingClientRect();
+                        const seed =
+                          rect && rect.width > 0 && rect.height > 0
+                            ? resolveTextItemAtClick(
+                                pageView.textItems,
+                                (e.clientX - rect.left) / rect.width,
+                                (e.clientY - rect.top) / rect.height,
+                                item,
+                              )
+                            : item;
                         if (columnMapMode && onColumnMapSeedPick) {
                           onColumnMapSeedPick({
                             page: pageView.page,
-                            seed: item,
+                            seed,
                             pageItems: pageView.textItems,
                           });
                           return;
                         }
                         if (!onValuePick) return;
-                        onValuePick(item.str.trim(), {
-                          x: item.x,
-                          y: item.y,
-                          width: item.width,
-                          height: item.height,
-                        });
+                        if (appendPickHint) {
+                          const expanded = expandDescriptionPick(
+                            seed,
+                            pageView.textItems,
+                          );
+                          onValuePick(expanded.text, expanded.box, {
+                            append: e.shiftKey,
+                          });
+                          return;
+                        }
+                        onValuePick(
+                          seed.str.trim(),
+                          {
+                            x: seed.x,
+                            y: seed.y,
+                            width: seed.width,
+                            height: seed.height,
+                          },
+                          { append: e.shiftKey },
+                        );
                       }}
                       className={`absolute rounded-[2px] ${
                         textPickEnabled
@@ -1342,7 +1409,8 @@ export function PdfViewer({
                         left: `${item.x * 100}%`,
                         top: `${item.y * 100}%`,
                         width: `${item.width * 100}%`,
-                        height: `${Math.max(item.height * 100, 1.2)}%`,
+                        // Keep hit height close to real glyphs so rows don't overlap.
+                        height: `${Math.max(item.height * 100, 0.45)}%`,
                       }}
                     />
                   ))}
@@ -1355,6 +1423,7 @@ export function PdfViewer({
                     primaryBox={pagePrimary}
                     pickMode={pickMode}
                     confirming={confirming}
+                    appendPickHint={appendPickHint}
                     onConfirmValue={onConfirmValue}
                     onClearValue={onClearValue}
                   />
@@ -1394,6 +1463,7 @@ function HighlightPopup({
   primaryBox,
   pickMode,
   confirming,
+  appendPickHint,
   onConfirmValue,
   onClearValue,
 }: {
@@ -1401,6 +1471,7 @@ function HighlightPopup({
   primaryBox: BoundingBox | null;
   pickMode: boolean;
   confirming: boolean;
+  appendPickHint?: boolean;
   onConfirmValue?: (value?: string) => void;
   onClearValue?: () => void;
 }) {
@@ -1424,79 +1495,82 @@ function HighlightPopup({
           : { right: '12px', bottom: '12px', left: 'auto', top: 'auto' }
       }
     >
-      {/* Interactive only — rest of panel lets PDF clicks pass through so you can re-pick. */}
+      {/* Only input + actions capture clicks — labels pass through so PDF
+          rows under the float (e.g. next product name) stay selectable. */}
       <div
-        className="pointer-events-auto"
+        className="pointer-events-auto rounded-lg border border-white/15 bg-[#0f1419] px-2.5 py-2"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        <div className="rounded-lg border border-white/15 bg-[#0f1419] px-2.5 py-2">
-          {pickMode ? (
-            <input
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && canSave) {
-                  e.preventDefault();
-                  onConfirmValue?.(draft.trim());
-                }
-              }}
-              className="w-full border-0 bg-transparent text-[17px] font-semibold leading-tight tracking-tight text-white outline-none placeholder:text-slate-600"
-              placeholder="Enter value…"
-              aria-label={highlight.label || 'Field value'}
-              autoFocus
-            />
-          ) : (
-            <p className="truncate text-[17px] font-semibold leading-tight tracking-tight">
-              {highlight.value || '—'}
-            </p>
-          )}
-        </div>
-        <p className="mt-1.5 truncate px-0.5 text-xs text-slate-400">
-          {highlight.label || 'Selected field'}
-        </p>
-        <p className="mt-1 px-0.5 text-[11px] text-slate-500">
-          Type the correct value, or click it on the PDF, then press ✓
-        </p>
-        {!anchorBox && (
-          <p className="mt-1 px-0.5 text-[11px] text-amber-300/90">
-            Click text on the PDF to reassign
+        {pickMode ? (
+          <input
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && canSave) {
+                e.preventDefault();
+                onConfirmValue?.(draft.trim());
+              }
+            }}
+            className="w-full border-0 bg-transparent text-[17px] font-semibold leading-tight tracking-tight text-white outline-none placeholder:text-slate-600"
+            placeholder="Enter value…"
+            aria-label={highlight.label || 'Field value'}
+            autoFocus
+          />
+        ) : (
+          <p className="truncate text-[17px] font-semibold leading-tight tracking-tight">
+            {highlight.value || '—'}
           </p>
         )}
-        <div className="mt-2 flex items-center justify-end gap-2 border-t border-white/10 pt-2">
-          <button
-            type="button"
-            title="Clear value"
-            disabled={!pickMode || confirming}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onClearValue?.();
-            }}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
-          >
-            <TrashIcon />
-          </button>
-          <button
-            type="button"
-            title="Save and go to next"
-            disabled={!canSave}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              onConfirmValue?.(draft.trim());
-            }}
-            className={`inline-flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-40 ${
-              highlight.tone === 'edited'
-                ? 'bg-emerald-500 text-white ring-2 ring-emerald-300/50'
-                : 'bg-emerald-500 text-white hover:bg-emerald-400'
-            }`}
-          >
-            {/* Never spin on ✓ — save is optimistic; spinner made cell confirm feel slow. */}
-            <CheckIcon />
-          </button>
-        </div>
+      </div>
+      <p className="pointer-events-none mt-1.5 truncate px-0.5 text-xs text-slate-400">
+        {highlight.label || 'Selected field'}
+      </p>
+      <p className="pointer-events-none mt-1 px-0.5 text-[11px] text-slate-500">
+        {appendPickHint
+          ? 'Click the correct product name on the PDF (replaces). Shift+click to add more, then ✓'
+          : 'Type the correct value, or click it on the PDF, then press ✓'}
+      </p>
+      {!anchorBox && (
+        <p className="pointer-events-none mt-1 px-0.5 text-[11px] text-amber-300/90">
+          Click text on the PDF to reassign
+        </p>
+      )}
+      <div
+        className="pointer-events-auto mt-2 flex items-center justify-end gap-2 border-t border-white/10 pt-2"
+        onMouseDown={(e) => e.stopPropagation()}
+      >
+        <button
+          type="button"
+          title="Clear value"
+          disabled={!pickMode || confirming}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onClearValue?.();
+          }}
+          className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
+        >
+          <TrashIcon />
+        </button>
+        <button
+          type="button"
+          title="Save and go to next"
+          disabled={!canSave}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onConfirmValue?.(draft.trim());
+          }}
+          className={`inline-flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-40 ${
+            highlight.tone === 'edited'
+              ? 'bg-emerald-500 text-white ring-2 ring-emerald-300/50'
+              : 'bg-emerald-500 text-white hover:bg-emerald-400'
+          }`}
+        >
+          <CheckIcon />
+        </button>
       </div>
     </div>
   );

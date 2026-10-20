@@ -1,4 +1,5 @@
 import type { PdfTextItem } from '@/components/pdf-viewer';
+import { collectDescriptionColumnBand } from '@/lib/description-pick';
 import { parseLocaleNumber } from '@/lib/parse-locale-number';
 import {
   LINE_REVIEW_COLUMN_LABELS,
@@ -129,6 +130,12 @@ export function collectColumnBandValues(
 ): ColumnBandValue[] {
   const parseMode: ColumnMapParseMode =
     typeof mode === 'boolean' ? (mode ? 'numeric' : 'text') : mode;
+
+  // Description / text column: one full product name per row (multi-line safe).
+  if (parseMode === 'text') {
+    return collectDescriptionColumnBand(pageItems, seed);
+  }
+
   const seedCx = seed.x + seed.width / 2;
   const tol = Math.max(0.022, Math.min(0.045, seed.width * 1.8));
   // Allow a little slack so the whole seed line is kept, but not header rows above.
@@ -282,7 +289,7 @@ export function findLineAnchorYOnPage(
 }
 
 function rowMatchThreshold(bandValues: ColumnBandValue[]): number {
-  if (bandValues.length < 2) return 0.04;
+  if (bandValues.length < 2) return 0.055;
   const gaps: number[] = [];
   for (let i = 1; i < bandValues.length; i++) {
     const prev = bandValues[i - 1];
@@ -294,9 +301,8 @@ function rowMatchThreshold(bandValues: ColumnBandValue[]): number {
     positive.length > 0
       ? positive[Math.floor(positive.length / 2)]
       : 0.02;
-  // Half a typical row gap — far enough to ignore empty rows, tight enough
-  // to not steal the next row's value.
-  return Math.max(0.018, Math.min(0.045, median * 0.55 + 0.01));
+  // Half a typical row gap — allow taller multi-line description boxes.
+  return Math.max(0.022, Math.min(0.07, median * 0.65 + 0.012));
 }
 
 /**

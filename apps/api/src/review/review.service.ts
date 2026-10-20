@@ -20,6 +20,7 @@ import { ValidationService } from '../validation/validation.service';
 import { HandoffDispatchService } from '../integrations/handoff/handoff-dispatch.service';
 import { deriveLineUnitFields } from '../extraction/line-unit-derivation';
 import { OrganizationsService } from '../organizations/organizations.service';
+import { BatchUpdateExtractionDto } from './dto/batch-update-extraction.dto';
 import { BulkUpdateLineColumnDto } from './dto/bulk-update-line-column.dto';
 import { CreateLineItemDto } from './dto/create-line-item.dto';
 import { UpdateFieldDto } from './dto/update-field.dto';
@@ -350,53 +351,7 @@ export class ReviewService {
       throw new NotFoundException('Line item not found');
     }
 
-    const assignString = (
-      key: keyof ExtractionLineItem,
-      value: string | null | undefined,
-    ) => {
-      if (value !== undefined) {
-        (line as unknown as Record<string, unknown>)[key as string] = value;
-      }
-    };
-
-    if (dto.position !== undefined) {
-      line.position = dto.position;
-    }
-    assignString('articleNumber', dto.articleNumber);
-    assignString('description', dto.description);
-    assignString('brand', dto.brand);
-    assignString('quantity', dto.quantity);
-    assignString('purchaseQuantity', dto.purchaseQuantity);
-    assignString('stockTakingQuantity', dto.stockTakingQuantity);
-    // Keep legacy quantity in sync when purchase qty is edited.
-    if (dto.purchaseQuantity !== undefined && dto.quantity === undefined) {
-      assignString('quantity', dto.purchaseQuantity);
-    }
-    assignString('packaging', dto.packaging);
-    assignString('packageQuantity', dto.packageQuantity);
-    assignString('unit', dto.unit);
-    assignString('purchaseUnit', dto.purchaseUnit);
-    assignString('stocktakingUnit', dto.stocktakingUnit);
-    assignString(
-      'stockTakingQuantityPerPurchaseUnit',
-      dto.stockTakingQuantityPerPurchaseUnit,
-    );
-    assignString('baseMeasurementUnit', dto.baseMeasurementUnit);
-    assignString('baseContentQuantity', dto.baseContentQuantity);
-    assignString('pricePerBaseUnit', dto.pricePerBaseUnit);
-    assignString(
-      'stockTakingQuantityPerBaseMeasurementUnit',
-      dto.stockTakingQuantityPerBaseMeasurementUnit,
-    );
-    assignString('unitPrice', dto.unitPrice);
-    assignString('stocktakingUnitPrice', dto.stocktakingUnitPrice);
-    assignString('discount', dto.discount);
-    assignString('vat', dto.vat);
-    assignString('amount', dto.amount);
-    assignString('expectedDelivery', dto.expectedDelivery);
-    if (dto.lineType !== undefined && dto.lineType !== null) {
-      line.lineType = dto.lineType;
-    }
+    this.applyLineItemPatch(line, dto);
 
     // Only re-derive units when qty/packaging/base fields change — not on
     // every cell ✓ (purchase unit "KG" was waiting on this + full reload).
@@ -429,6 +384,135 @@ export class ReviewService {
 
     // Tiny ack — skip full extraction reload (was the remaining ✓ delay).
     return { ok: true as const };
+  }
+
+  /**
+   * Apply many field + line edits in one request (review draft flush).
+   */
+  async batchUpdateExtraction(
+    organizationId: string,
+    documentId: string,
+    dto: BatchUpdateExtractionDto,
+  ) {
+    const document = await this.getOwned(organizationId, documentId);
+    this.assertEditable(document.status);
+
+    const extraction = await this.requireExtraction(documentId);
+    const fieldUpdates = dto.fields ?? [];
+    const lineUpdates = dto.lineItems ?? [];
+
+    if (!fieldUpdates.length && !lineUpdates.length) {
+      return { ok: true as const, fieldsUpdated: 0, linesUpdated: 0 };
+    }
+
+    let fieldsUpdated = 0;
+    for (const row of fieldUpdates) {
+      const field = await this.fieldsRepo.findOne({
+        where: { id: row.fieldId, extractionId: extraction.id },
+      });
+      if (!field) continue;
+      const fromForMemory = field.originalValue ?? field.currentValue;
+      if (row.currentValue !== undefined) {
+        field.currentValue = row.currentValue;
+      }
+      field.isUserEdited = true;
+      await this.fieldsRepo.save(field);
+      fieldsUpdated += 1;
+      void this.fieldCorrectionService.remember({
+        organizationId,
+        documentType: document.documentType,
+        fieldKey: field.fieldKey,
+        fromValue: fromForMemory,
+        toValue: field.currentValue,
+      });
+    }
+
+    let linesUpdated = 0;
+    for (const row of lineUpdates) {
+      const { lineItemId, ...patch } = row;
+      const line = await this.lineItemsRepo.findOne({
+        where: { id: lineItemId, extractionId: extraction.id },
+      });
+      if (!line) continue;
+      this.applyLineItemPatch(line, patch);
+      if (this.dtoNeedsUnitDerivation(patch)) {
+        await this.applyDerivedUnitFields(
+          organizationId,
+          document.documentType,
+          line,
+        );
+      } else if (
+        patch.purchaseQuantity !== undefined ||
+        (patch.quantity !== undefined && patch.purchaseQuantity === undefined)
+      ) {
+        if (line.purchaseQuantity != null && line.purchaseQuantity !== '') {
+          line.quantity = line.purchaseQuantity;
+        }
+      }
+      line.isUserEdited = true;
+      await this.lineItemsRepo.save(line);
+      linesUpdated += 1;
+    }
+
+    void this.ensureInReview(document, organizationId);
+    void this.processingLog.log(
+      documentId,
+      organizationId,
+      'EXTRACTION_BATCH_EDITED',
+      `Batch saved ${fieldsUpdated} field(s), ${linesUpdated} line(s)`,
+      { meta: { fieldsUpdated, linesUpdated } },
+    );
+
+    return { ok: true as const, fieldsUpdated, linesUpdated };
+  }
+
+  private applyLineItemPatch(line: ExtractionLineItem, dto: UpdateLineItemDto) {
+    const assignString = (
+      key: keyof ExtractionLineItem,
+      value: string | null | undefined,
+    ) => {
+      if (value !== undefined) {
+        (line as unknown as Record<string, unknown>)[key as string] = value;
+      }
+    };
+
+    if (dto.position !== undefined) {
+      line.position = dto.position;
+    }
+    assignString('articleNumber', dto.articleNumber);
+    assignString('description', dto.description);
+    assignString('brand', dto.brand);
+    assignString('quantity', dto.quantity);
+    assignString('purchaseQuantity', dto.purchaseQuantity);
+    assignString('stockTakingQuantity', dto.stockTakingQuantity);
+    if (dto.purchaseQuantity !== undefined && dto.quantity === undefined) {
+      assignString('quantity', dto.purchaseQuantity);
+    }
+    assignString('packaging', dto.packaging);
+    assignString('packageQuantity', dto.packageQuantity);
+    assignString('unit', dto.unit);
+    assignString('purchaseUnit', dto.purchaseUnit);
+    assignString('stocktakingUnit', dto.stocktakingUnit);
+    assignString(
+      'stockTakingQuantityPerPurchaseUnit',
+      dto.stockTakingQuantityPerPurchaseUnit,
+    );
+    assignString('baseMeasurementUnit', dto.baseMeasurementUnit);
+    assignString('baseContentQuantity', dto.baseContentQuantity);
+    assignString('pricePerBaseUnit', dto.pricePerBaseUnit);
+    assignString(
+      'stockTakingQuantityPerBaseMeasurementUnit',
+      dto.stockTakingQuantityPerBaseMeasurementUnit,
+    );
+    assignString('unitPrice', dto.unitPrice);
+    assignString('stocktakingUnitPrice', dto.stocktakingUnitPrice);
+    assignString('discount', dto.discount);
+    assignString('vat', dto.vat);
+    assignString('amount', dto.amount);
+    assignString('expectedDelivery', dto.expectedDelivery);
+    if (dto.lineType !== undefined && dto.lineType !== null) {
+      line.lineType = dto.lineType;
+    }
   }
 
   /** True when PATCH touches fields that feed packaging / unit derivation. */

@@ -13,6 +13,7 @@ import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { OrganizationId } from '../common/decorators/organization-id.decorator';
 import { RequirePermissions } from '../common/decorators/permissions.decorator';
 import { PermissionCode } from '../common/enums';
+import { BatchUpdateExtractionDto } from './dto/batch-update-extraction.dto';
 import { BulkUpdateLineColumnDto } from './dto/bulk-update-line-column.dto';
 import { CreateLineItemDto } from './dto/create-line-item.dto';
 import { RejectDocumentDto } from './dto/reject-document.dto';
@@ -60,6 +61,16 @@ export class ReviewController {
     @Param('id', ParseUUIDPipe) id: string,
   ) {
     return this.reviewService.reopen(organizationId, id);
+  }
+
+  @Patch(':id/extraction/batch')
+  @RequirePermissions(PermissionCode.DOCUMENT_EDIT)
+  batchUpdateExtraction(
+    @OrganizationId() organizationId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: BatchUpdateExtractionDto,
+  ) {
+    return this.reviewService.batchUpdateExtraction(organizationId, id, body);
   }
 
   @Patch(':id/extraction/fields/:fieldId')

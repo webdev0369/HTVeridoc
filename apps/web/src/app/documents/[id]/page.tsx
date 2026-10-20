@@ -94,6 +94,68 @@ function toApiScalar(value: string | number | null | undefined) {
   return String(value);
 }
 
+function selectionPickKey(sel: NonNullable<ReviewSelection>): string {
+  if (sel.type === 'field') return `field:${sel.id}`;
+  return `line:${sel.id}:${sel.column}`;
+}
+
+function mergePickBoxes(
+  a?: { x: number; y: number; width: number; height: number } | null,
+  b?: { x: number; y: number; width: number; height: number } | null,
+) {
+  if (!a) return b ?? undefined;
+  if (!b) return a;
+  const x1 = Math.min(a.x, b.x);
+  const y1 = Math.min(a.y, b.y);
+  const x2 = Math.max(a.x + a.width, b.x + b.width);
+  const y2 = Math.max(a.y + a.height, b.y + b.height);
+  return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+}
+
+function linePatchToApiBody(patch: Partial<ExtractionLineItemDto>) {
+  const body: Record<string, unknown> = {};
+  if ('articleNumber' in patch) body.articleNumber = patch.articleNumber;
+  if ('description' in patch) body.description = patch.description;
+  if ('unit' in patch) body.unit = patch.unit;
+  if ('purchaseUnit' in patch) body.purchaseUnit = patch.purchaseUnit;
+  if ('stocktakingUnit' in patch) body.stocktakingUnit = patch.stocktakingUnit;
+  if ('quantity' in patch) body.quantity = toApiScalar(patch.quantity);
+  if ('purchaseQuantity' in patch) {
+    body.purchaseQuantity = toApiScalar(patch.purchaseQuantity);
+  }
+  if ('stockTakingQuantity' in patch) {
+    body.stockTakingQuantity = toApiScalar(patch.stockTakingQuantity);
+  }
+  if ('stockTakingQuantityPerPurchaseUnit' in patch) {
+    body.stockTakingQuantityPerPurchaseUnit = toApiScalar(
+      patch.stockTakingQuantityPerPurchaseUnit,
+    );
+  }
+  if ('baseMeasurementUnit' in patch) {
+    body.baseMeasurementUnit = patch.baseMeasurementUnit;
+  }
+  if ('baseContentQuantity' in patch) {
+    body.baseContentQuantity = toApiScalar(patch.baseContentQuantity);
+  }
+  if ('pricePerBaseUnit' in patch) {
+    body.pricePerBaseUnit = toApiScalar(patch.pricePerBaseUnit);
+  }
+  if ('stockTakingQuantityPerBaseMeasurementUnit' in patch) {
+    body.stockTakingQuantityPerBaseMeasurementUnit = toApiScalar(
+      patch.stockTakingQuantityPerBaseMeasurementUnit,
+    );
+  }
+  if ('unitPrice' in patch) body.unitPrice = toApiScalar(patch.unitPrice);
+  if ('stocktakingUnitPrice' in patch) {
+    body.stocktakingUnitPrice = toApiScalar(patch.stocktakingUnitPrice);
+  }
+  if ('discount' in patch) body.discount = toApiScalar(patch.discount);
+  if ('vat' in patch) body.vat = toApiScalar(patch.vat);
+  if ('amount' in patch) body.amount = toApiScalar(patch.amount);
+  if ('lineType' in patch) body.lineType = patch.lineType;
+  return body;
+}
+
 export default function DocumentDetailPage() {
   const params = useParams<{ id: string }>();
   const id = params.id;
@@ -124,6 +186,21 @@ export default function DocumentDetailPage() {
   /** Avoid re-firing auto-validate for the same document while stuck on EXTRACTED */
   const autoValidateRef = useRef<string | null>(null);
   const autoStartReviewRef = useRef<string | null>(null);
+  /** Local review draft — flushed once on Confirm / Re-validate. */
+  const pendingDraftRef = useRef<{
+    fields: Map<string, string | null>;
+    lines: Map<string, Partial<ExtractionLineItemDto>>;
+  }>({ fields: new Map(), lines: new Map() });
+  const pdfPickSessionRef = useRef<{ key: string; count: number }>({
+    key: '',
+    count: 0,
+  });
+  const [dirtyTick, setDirtyTick] = useState(0);
+  const [savingDraft, setSavingDraft] = useState(false);
+  const hasUnsavedEdits =
+    pendingDraftRef.current.fields.size > 0 ||
+    pendingDraftRef.current.lines.size > 0;
+  void dirtyTick;
 
   useEffect(() => {
     try {
@@ -221,16 +298,6 @@ export default function DocumentDetailPage() {
     enabled: Boolean(data?.documentType),
   });
 
-  const revalidateTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
-    null,
-  );
-
-  useEffect(() => {
-    return () => {
-      if (revalidateTimerRef.current) clearTimeout(revalidateTimerRef.current);
-    };
-  }, []);
-
   const invalidateDoc = () => {
     queryClient.invalidateQueries({ queryKey: ['documents', id] });
     queryClient.invalidateQueries({ queryKey: ['extraction', id] });
@@ -239,28 +306,144 @@ export default function DocumentDetailPage() {
     queryClient.invalidateQueries({ queryKey: ['documents'] });
   };
 
-  const scheduleRevalidate = () => {
-    if (revalidateTimerRef.current) clearTimeout(revalidateTimerRef.current);
-    // Debounce so rapid deletes/edits don't each run a full validate.
-    revalidateTimerRef.current = setTimeout(() => {
-      void apiFetch<ValidationDto>(`/documents/${id}/validate`, {
-        method: 'POST',
-      })
-        .then((validation) => {
-          queryClient.setQueryData(['validation', id], validation);
-          queryClient.invalidateQueries({ queryKey: ['documents', id] });
-          queryClient.invalidateQueries({ queryKey: ['events', id] });
-        })
-        .catch(() => {
-          queryClient.invalidateQueries({ queryKey: ['validation', id] });
-        });
-    }, 1200);
+  const markDraftDirty = () => setDirtyTick((n) => n + 1);
+
+  const clearPendingDraft = () => {
+    pendingDraftRef.current = { fields: new Map(), lines: new Map() };
+    markDraftDirty();
   };
+
+  const queueFieldEdit = (fieldId: string, currentValue: string | null) => {
+    pendingDraftRef.current.fields.set(fieldId, currentValue);
+    queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
+      if (!prev?.fields) return prev;
+      return {
+        ...prev,
+        fields: prev.fields.map((f) =>
+          f.id === fieldId
+            ? { ...f, currentValue, isUserEdited: true }
+            : f,
+        ),
+      };
+    });
+    markDraftDirty();
+  };
+
+  const queueLineEdit = (
+    lineItemId: string,
+    patch: Partial<ExtractionLineItemDto>,
+  ) => {
+    const prev = pendingDraftRef.current.lines.get(lineItemId) ?? {};
+    pendingDraftRef.current.lines.set(lineItemId, { ...prev, ...patch });
+    queryClient.setQueryData<ExtractionDto>(['extraction', id], (prevExt) => {
+      if (!prevExt?.lineItems) return prevExt;
+      return {
+        ...prevExt,
+        lineItems: prevExt.lineItems.map((l) =>
+          l.id === lineItemId ? { ...l, ...patch, isUserEdited: true } : l,
+        ),
+      };
+    });
+    markDraftDirty();
+  };
+
+  const buildDraftBatchPayload = () => {
+    const draft = pendingDraftRef.current;
+    if (draft.fields.size === 0 && draft.lines.size === 0) return null;
+    return {
+      fields: [...draft.fields.entries()].map(([fieldId, currentValue]) => ({
+        fieldId,
+        currentValue,
+      })),
+      lineItems: [...draft.lines.entries()].map(([lineItemId, patch]) => ({
+        lineItemId,
+        ...linePatchToApiBody(patch),
+      })),
+    };
+  };
+
+  const flushPendingEdits = async () => {
+    const payload = buildDraftBatchPayload();
+    if (!payload) return;
+
+    await apiFetch<{ ok: true }>(`/documents/${id}/extraction/batch`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+    });
+    clearPendingDraft();
+  };
+
+  const saveDraftNow = async () => {
+    if (savingDraft) return;
+    setSavingDraft(true);
+    try {
+      await flushPendingEdits();
+      toast.success('Edits saved');
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError ? err.message : 'Failed to save edits',
+      );
+    } finally {
+      setSavingDraft(false);
+    }
+  };
+
+  const discardDraftNow = () => {
+    if (!hasUnsavedEdits) return;
+    const ok = window.confirm(
+      'Discard unsaved cell edits? This cannot be undone.',
+    );
+    if (!ok) return;
+    clearPendingDraft();
+    // Reload extraction from server so UI matches last saved values.
+    void queryClient.invalidateQueries({ queryKey: ['extraction', id] });
+    toast.message('Unsaved edits discarded');
+  };
+
+  useEffect(() => {
+    clearPendingDraft();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reset draft on document change
+  }, [id]);
+
+  useEffect(() => {
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      const payload = buildDraftBatchPayload();
+      if (!payload) return;
+
+      // Best-effort save if the user leaves anyway (F5 / close tab).
+      try {
+        const accessToken =
+          typeof window !== 'undefined'
+            ? localStorage.getItem('accessToken')
+            : null;
+        const apiBase =
+          process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+        void fetch(`${apiBase}/documents/${id}/extraction/batch`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(accessToken
+              ? { Authorization: `Bearer ${accessToken}` }
+              : {}),
+          },
+          body: JSON.stringify(payload),
+          keepalive: true,
+        });
+      } catch {
+        /* ignore — browser leave dialog still shown */
+      }
+
+      e.preventDefault();
+      e.returnValue = '';
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- id + draft helpers
+  }, [id]);
 
   const afterExtractionEdit = (extraction: ExtractionDto) => {
     queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
       if (!prev) return extraction;
-      // Keep heavy blobs from cache so edit responses stay light/fast.
       return {
         ...extraction,
         rawResponse: prev.rawResponse ?? extraction.rawResponse,
@@ -269,7 +452,6 @@ export default function DocumentDetailPage() {
     });
     queryClient.invalidateQueries({ queryKey: ['documents', id] });
     queryClient.invalidateQueries({ queryKey: ['events', id] });
-    scheduleRevalidate();
   };
 
   const processMutation = useMutation({
@@ -279,8 +461,12 @@ export default function DocumentDetailPage() {
   });
 
   const revalidateMutation = useMutation({
-    mutationFn: () =>
-      apiFetch<ValidationDto>(`/documents/${id}/validate`, { method: 'POST' }),
+    mutationFn: async () => {
+      await flushPendingEdits();
+      return apiFetch<ValidationDto>(`/documents/${id}/validate`, {
+        method: 'POST',
+      });
+    },
     onSuccess: invalidateDoc,
   });
 
@@ -331,14 +517,25 @@ export default function DocumentDetailPage() {
   }, [id, data?.status, user?.permissions]);
 
   const approveMutation = useMutation({
-    mutationFn: () =>
-      apiFetch<DocumentDto>(`/documents/${id}/approve`, { method: 'POST' }),
+    mutationFn: async () => {
+      await flushPendingEdits();
+      const validation = await apiFetch<ValidationDto>(
+        `/documents/${id}/validate`,
+        { method: 'POST' },
+      );
+      queryClient.setQueryData(['validation', id], validation);
+      return apiFetch<DocumentDto>(`/documents/${id}/approve`, {
+        method: 'POST',
+      });
+    },
     onSuccess: () => {
+      clearPendingDraft();
       invalidateDoc();
       toast.success('Document approved');
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : 'Approve failed');
+      void queryClient.invalidateQueries({ queryKey: ['validation', id] });
     },
   });
 
@@ -388,93 +585,6 @@ export default function DocumentDetailPage() {
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : 'Reopen failed');
     },
-  });
-
-  /** After cell ✓ — cache already updated optimistically; only soft side-effects. */
-  const afterCellSave = () => {
-    queryClient.invalidateQueries({ queryKey: ['events', id] });
-    scheduleRevalidate();
-  };
-
-  const saveFieldMutation = useMutation({
-    mutationFn: ({
-      fieldId,
-      currentValue,
-    }: {
-      fieldId: string;
-      currentValue: string | null;
-    }) =>
-      apiFetch<{ ok: true }>(
-        `/documents/${id}/extraction/fields/${fieldId}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify({ currentValue }),
-        },
-      ),
-    onSuccess: afterCellSave,
-  });
-
-  const saveLineMutation = useMutation({
-    mutationFn: ({
-      lineItemId,
-      patch,
-    }: {
-      lineItemId: string;
-      patch: Partial<ExtractionLineItemDto>;
-    }) => {
-      // Only send keys present on the patch — never null out other columns.
-      const body: Record<string, unknown> = {};
-      if ('articleNumber' in patch) body.articleNumber = patch.articleNumber;
-      if ('description' in patch) body.description = patch.description;
-      if ('unit' in patch) body.unit = patch.unit;
-      if ('purchaseUnit' in patch) body.purchaseUnit = patch.purchaseUnit;
-      if ('stocktakingUnit' in patch) {
-        body.stocktakingUnit = patch.stocktakingUnit;
-      }
-      if ('quantity' in patch) body.quantity = toApiScalar(patch.quantity);
-      if ('purchaseQuantity' in patch) {
-        body.purchaseQuantity = toApiScalar(patch.purchaseQuantity);
-      }
-      if ('stockTakingQuantity' in patch) {
-        body.stockTakingQuantity = toApiScalar(patch.stockTakingQuantity);
-      }
-      if ('stockTakingQuantityPerPurchaseUnit' in patch) {
-        body.stockTakingQuantityPerPurchaseUnit = toApiScalar(
-          patch.stockTakingQuantityPerPurchaseUnit,
-        );
-      }
-      if ('baseMeasurementUnit' in patch) {
-        body.baseMeasurementUnit = patch.baseMeasurementUnit;
-      }
-      if ('baseContentQuantity' in patch) {
-        body.baseContentQuantity = toApiScalar(patch.baseContentQuantity);
-      }
-      if ('pricePerBaseUnit' in patch) {
-        body.pricePerBaseUnit = toApiScalar(patch.pricePerBaseUnit);
-      }
-      if ('stockTakingQuantityPerBaseMeasurementUnit' in patch) {
-        body.stockTakingQuantityPerBaseMeasurementUnit = toApiScalar(
-          patch.stockTakingQuantityPerBaseMeasurementUnit,
-        );
-      }
-      if ('unitPrice' in patch) body.unitPrice = toApiScalar(patch.unitPrice);
-      if ('stocktakingUnitPrice' in patch) {
-        body.stocktakingUnitPrice = toApiScalar(patch.stocktakingUnitPrice);
-      }
-      if ('discount' in patch) body.discount = toApiScalar(patch.discount);
-      if ('vat' in patch) body.vat = toApiScalar(patch.vat);
-      if ('amount' in patch) body.amount = toApiScalar(patch.amount);
-      if ('lineType' in patch) body.lineType = patch.lineType;
-
-      return apiFetch<{ ok: true }>(
-        `/documents/${id}/extraction/line-items/${lineItemId}`,
-        {
-          method: 'PATCH',
-          body: JSON.stringify(body),
-        },
-      );
-    },
-    onSuccess: afterCellSave,
   });
 
   const addLineMutation = useMutation({
@@ -550,6 +660,9 @@ export default function DocumentDetailPage() {
       setSelection((prev) =>
         prev?.type === 'line' && prev.id === lineItemId ? null : prev,
       );
+
+      pendingDraftRef.current.lines.delete(lineItemId);
+      markDraftDirty();
 
       return { prevExtraction, prevValidation };
     },
@@ -657,6 +770,7 @@ export default function DocumentDetailPage() {
 
   const handleSelect = (next: ReviewSelection) => {
     if (mapColumn) return; // ignore normal selection while mapping a column
+    pdfPickSessionRef.current = { key: '', count: 0 };
     setSelection(next);
     if (next?.page) setPdfPage(next.page);
   };
@@ -742,21 +856,14 @@ export default function DocumentDetailPage() {
   const handlePdfValuePick = (
     value: string,
     box?: { x: number; y: number; width: number; height: number },
+    opts?: { append?: boolean },
   ) => {
     if (!selection || !canEdit || !value.trim()) return;
+    const picked = value.trim();
+
     if (selection.type === 'field') {
-      const currentValue = normalizeFieldValue(selection, value.trim());
-      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
-        if (!prev?.fields) return prev;
-        return {
-          ...prev,
-          fields: prev.fields.map((f) =>
-            f.id === selection.id
-              ? { ...f, currentValue, isUserEdited: true }
-              : f,
-          ),
-        };
-      });
+      const currentValue = normalizeFieldValue(selection, picked);
+      queueFieldEdit(selection.id, currentValue);
       setSelection({
         ...selection,
         value: currentValue,
@@ -764,51 +871,53 @@ export default function DocumentDetailPage() {
         page: pdfPage,
         boundingBox: box ?? selection.boundingBox,
       });
-      void saveFieldMutation
-        .mutateAsync({ fieldId: selection.id, currentValue })
-        .catch((err) => {
-          toast.error(
-            err instanceof ApiError ? err.message : 'Failed to save field',
-          );
-        });
       return;
     }
+
     if (selection.type === 'line') {
-      const patch = lineColumnToPatch(selection.column, value.trim());
-      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
-        if (!prev?.lineItems) return prev;
-        return {
-          ...prev,
-          lineItems: prev.lineItems.map((l) =>
-            l.id === selection.id
-              ? { ...l, ...patch, isUserEdited: true }
-              : l,
-          ),
-        };
-      });
-      setLineConfirmSignal({
-        lineId: selection.id,
-        column: selection.column,
-        at: Date.now(),
-      });
+      // Description: each click replaces with text at that click.
+      // Shift+click appends (for rare extra fragments).
+      const appendDescription =
+        selection.column === 'description' && Boolean(opts?.append);
+      let nextText = picked;
+      if (appendDescription) {
+        const prev = selection.value?.trim() ?? '';
+        if (prev) {
+          if (prev === picked || prev.includes(picked)) {
+            nextText = prev;
+          } else if (picked.includes(prev)) {
+            nextText = picked;
+          } else {
+            nextText = `${prev} ${picked}`;
+          }
+        }
+      }
+
+      const nextBox =
+        appendDescription && box
+          ? mergePickBoxes(selection.boundingBox, box)
+          : (box ?? selection.boundingBox);
+
+      const patch = lineColumnToPatch(selection.column, nextText);
+      queueLineEdit(selection.id, patch);
+      if (selection.column !== 'description') {
+        setLineConfirmSignal({
+          lineId: selection.id,
+          column: selection.column,
+          at: Date.now(),
+        });
+      }
       setSelection({
         ...selection,
-        value: value.trim(),
+        value: nextText,
         tone: 'edited',
         page: pdfPage,
-        boundingBox: box ?? selection.boundingBox,
+        boundingBox: nextBox,
       });
-      void saveLineMutation
-        .mutateAsync({ lineItemId: selection.id, patch })
-        .catch((err) => {
-          toast.error(
-            err instanceof ApiError ? err.message : 'Failed to save line',
-          );
-        });
     }
   };
 
-  /** Rossum green check — advance UI immediately; save in background (no spinner wait). */
+  /** Local draft only — API flush on Confirm / Re-validate. */
   const handleConfirmValue = (editedValue?: string) => {
     if (!selection || !canEdit) return;
     const next =
@@ -818,50 +927,17 @@ export default function DocumentDetailPage() {
 
     const current = selection;
 
-    // Optimistic cache so the table updates without waiting on PATCH.
     if (current.type === 'field') {
       const currentValue = normalizeFieldValue(current, next);
-      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
-        if (!prev?.fields) return prev;
-        return {
-          ...prev,
-          fields: prev.fields.map((f) =>
-            f.id === current.id
-              ? { ...f, currentValue, isUserEdited: true }
-              : f,
-          ),
-        };
-      });
-      void saveFieldMutation
-        .mutateAsync({ fieldId: current.id, currentValue })
-        .catch((err) => {
-          toast.error(
-            err instanceof ApiError ? err.message : 'Failed to save field',
-          );
-        });
+      queueFieldEdit(current.id, currentValue);
     } else {
       const patch = lineColumnToPatch(current.column, next);
-      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
-        if (!prev?.lineItems) return prev;
-        return {
-          ...prev,
-          lineItems: prev.lineItems.map((l) =>
-            l.id === current.id ? { ...l, ...patch, isUserEdited: true } : l,
-          ),
-        };
-      });
+      queueLineEdit(current.id, patch);
       setLineConfirmSignal({
         lineId: current.id,
         column: current.column,
         at: Date.now(),
       });
-      void saveLineMutation
-        .mutateAsync({ lineItemId: current.id, patch })
-        .catch((err) => {
-          toast.error(
-            err instanceof ApiError ? err.message : 'Failed to save line',
-          );
-        });
     }
 
     const extraction = queryClient.getQueryData<ExtractionDto>([
@@ -886,49 +962,20 @@ export default function DocumentDetailPage() {
     }
   };
 
-  /** Rossum trash — clear selected field / line cell (optimistic). */
   const handleClearValue = () => {
     if (!selection || !canEdit) return;
+    pdfPickSessionRef.current = {
+      key: selectionPickKey(selection),
+      count: 0,
+    };
     if (selection.type === 'field') {
-      queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
-        if (!prev?.fields) return prev;
-        return {
-          ...prev,
-          fields: prev.fields.map((f) =>
-            f.id === selection.id
-              ? { ...f, currentValue: null, isUserEdited: true }
-              : f,
-          ),
-        };
-      });
+      queueFieldEdit(selection.id, null);
       setSelection({ ...selection, value: null, tone: 'ai' });
-      void saveFieldMutation
-        .mutateAsync({ fieldId: selection.id, currentValue: null })
-        .catch((err) => {
-          toast.error(
-            err instanceof ApiError ? err.message : 'Failed to clear field',
-          );
-        });
       return;
     }
     const patch = lineColumnToPatch(selection.column, null);
-    queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
-      if (!prev?.lineItems) return prev;
-      return {
-        ...prev,
-        lineItems: prev.lineItems.map((l) =>
-          l.id === selection.id ? { ...l, ...patch, isUserEdited: true } : l,
-        ),
-      };
-    });
+    queueLineEdit(selection.id, patch);
     setSelection({ ...selection, value: null, tone: 'ai' });
-    void saveLineMutation
-      .mutateAsync({ lineItemId: selection.id, patch })
-      .catch((err) => {
-        toast.error(
-          err instanceof ApiError ? err.message : 'Failed to clear line',
-        );
-      });
   };
 
   const isLive = Boolean(data?.status && LIVE_STATUSES.has(data.status));
@@ -991,11 +1038,7 @@ export default function DocumentDetailPage() {
     );
   }
 
-  const actionError =
-    processMutation.error ||
-    revalidateMutation.error ||
-    saveFieldMutation.error ||
-    saveLineMutation.error;
+  const actionError = processMutation.error || revalidateMutation.error;
 
   const hasReviewActions =
     canStartReview || canApprove || canReject || canReopen;
@@ -1017,21 +1060,27 @@ export default function DocumentDetailPage() {
         canApprove={Boolean(canApprove)}
         canReject={Boolean(canReject)}
         canReopen={Boolean(canReopen)}
-        approveDisabled={
-          requiredIncomplete.length > 0 ||
-          confirmationBlockers.length > 0
-        }
+        approveDisabled={requiredIncomplete.length > 0}
         approveDisabledReason={
-          confirmationBlockers.length
-            ? `Fix ${confirmationBlockers.length} confirmation blocker(s) first`
-            : requiredIncomplete.length
-              ? `Required: ${requiredIncomplete.join(', ')}`
+          requiredIncomplete.length
+            ? `Required: ${requiredIncomplete.join(', ')}`
+            : confirmationBlockers.length
+              ? `Will re-check ${confirmationBlockers.length} blocker(s) on Confirm`
               : undefined
         }
         busy={reviewBusy}
         onStartReview={() => startReviewMutation.mutate()}
         onApprove={() => approveMutation.mutate()}
-        onReject={(reason) => rejectMutation.mutate(reason)}
+        onReject={(reason) => {
+          if (hasUnsavedEdits) {
+            const ok = window.confirm(
+              'You have unsaved cell edits. Reject anyway and discard them?',
+            );
+            if (!ok) return;
+            clearPendingDraft();
+          }
+          rejectMutation.mutate(reason);
+        }}
         onReopen={() => reopenMutation.mutate()}
         error={
           startReviewMutation.error ||
@@ -1063,6 +1112,30 @@ export default function DocumentDetailPage() {
               {data.fileName}
             </h1>
             <StatusBadge status={data.status} variant="dark" />
+            {hasUnsavedEdits && (
+              <div
+                className="inline-flex max-w-full flex-wrap items-center gap-1.5 rounded-md bg-amber-500/15 px-2 py-1 text-[11px] font-medium text-amber-100 ring-1 ring-amber-400/30"
+                title="Save before refresh, or continue editing then Confirm"
+              >
+                <span className="whitespace-nowrap">Unsaved edits</span>
+                <button
+                  type="button"
+                  disabled={savingDraft}
+                  onClick={() => void saveDraftNow()}
+                  className="rounded bg-amber-400/25 px-2 py-0.5 font-semibold text-amber-50 hover:bg-amber-400/40 disabled:opacity-50"
+                >
+                  {savingDraft ? 'Saving…' : 'Save now'}
+                </button>
+                <button
+                  type="button"
+                  disabled={savingDraft}
+                  onClick={discardDraftNow}
+                  className="rounded px-2 py-0.5 text-amber-200/90 hover:bg-white/10 hover:text-white disabled:opacity-50"
+                >
+                  Discard
+                </button>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -1087,6 +1160,7 @@ export default function DocumentDetailPage() {
               disabled={revalidateMutation.isPending}
               onClick={() => revalidateMutation.mutate()}
               className="text-slate-300 hover:bg-white/5 hover:text-white"
+              title="Save draft and re-run validation"
             >
               {revalidateMutation.isPending ? 'Validating…' : 'Re-validate'}
             </Button>
@@ -1097,7 +1171,16 @@ export default function DocumentDetailPage() {
               variant="ghost"
               size="sm"
               disabled={processMutation.isPending}
-              onClick={() => processMutation.mutate()}
+              onClick={() => {
+                if (hasUnsavedEdits) {
+                  const ok = window.confirm(
+                    'You have unsaved cell edits. Reprocess will discard them. Continue?',
+                  );
+                  if (!ok) return;
+                  clearPendingDraft();
+                }
+                processMutation.mutate();
+              }}
               className="text-slate-300 hover:bg-white/5 hover:text-white"
             >
               {processMutation.isPending
@@ -1140,33 +1223,7 @@ export default function DocumentDetailPage() {
                   field && isDateFieldKey(field.fieldKey)
                     ? normalizeDateInput(currentValue)
                     : currentValue;
-                queryClient.setQueryData<ExtractionDto>(
-                  ['extraction', id],
-                  (prev) => {
-                    if (!prev?.fields) return prev;
-                    return {
-                      ...prev,
-                      fields: prev.fields.map((f) =>
-                        f.id === fieldId
-                          ? {
-                              ...f,
-                              currentValue: normalized,
-                              isUserEdited: true,
-                            }
-                          : f,
-                      ),
-                    };
-                  },
-                );
-                void saveFieldMutation
-                  .mutateAsync({ fieldId, currentValue: normalized })
-                  .catch((err) => {
-                    toast.error(
-                      err instanceof ApiError
-                        ? err.message
-                        : 'Failed to save field',
-                    );
-                  });
+                queueFieldEdit(fieldId, normalized);
               }}
             />
           ) : reviewActionsPending ||
@@ -1213,12 +1270,14 @@ export default function DocumentDetailPage() {
                       (mapColumn === 'purchaseQuantity' ||
                         mapColumn === 'stockTakingQuantity')
                     ? `Map column: click Levert antall / delivered qty for “${columnMapLabel(mapColumn)}” (not Bestilt antall / ordered). Empty cells stay empty.`
-                    : `Map column: click the first table cell for “${columnMapLabel(mapColumn)}” (header text above the table is ignored)`
+                    : mapColumn === 'description'
+                      ? `Map column: click a product name under “${columnMapLabel(mapColumn)}” — multi-line names are kept per row`
+                      : `Map column: click the first table cell for “${columnMapLabel(mapColumn)}” (header text above the table is ignored)`
                 : null
             }
             onColumnMapSeedPick={handleColumnMapSeedPick}
-            onValuePick={(value, box) => {
-              void handlePdfValuePick(value, box);
+            onValuePick={(value, box, opts) => {
+              void handlePdfValuePick(value, box, opts);
             }}
             onConfirmValue={(value) => {
               void handleConfirmValue(value);
@@ -1227,6 +1286,9 @@ export default function DocumentDetailPage() {
               void handleClearValue();
             }}
             confirming={false}
+            appendPickHint={
+              selection?.type === 'line' && selection.column === 'description'
+            }
             className="min-h-0 min-w-0 flex-1"
           />
 
@@ -1264,35 +1326,12 @@ export default function DocumentDetailPage() {
                 }
                 actionsLoading={authLoading}
                 onSaveLine={async (lineItemId, patch) => {
-                  queryClient.setQueryData<ExtractionDto>(
-                    ['extraction', id],
-                    (prev) => {
-                      if (!prev?.lineItems) return prev;
-                      return {
-                        ...prev,
-                        lineItems: prev.lineItems.map((l) =>
-                          l.id === lineItemId
-                            ? { ...l, ...patch, isUserEdited: true }
-                            : l,
-                        ),
-                      };
-                    },
-                  );
-                  void saveLineMutation
-                    .mutateAsync({ lineItemId, patch })
-                    .catch((err) => {
-                      toast.error(
-                        err instanceof ApiError
-                          ? err.message
-                          : 'Failed to save line',
-                      );
-                    });
+                  queueLineEdit(lineItemId, patch);
                 }}
                 onAddLine={async () => {
                   await addLineMutation.mutateAsync();
                 }}
                 onDeleteLine={async (lineItemId) => {
-                  // Optimistic: row disappears immediately; network finishes in background.
                   deleteLineMutation.mutate(lineItemId);
                 }}
               />
