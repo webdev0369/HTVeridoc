@@ -558,7 +558,9 @@ export function LineItemsTable({
                         : 'ai',
                   });
                 }}
-                onSave={(patch) => saveLineAndMark(line.id, patch)}
+                onSave={async (patch) => {
+                  saveLineAndMark(line.id, patch);
+                }}
                 onDelete={
                   showActions
                     ? () =>

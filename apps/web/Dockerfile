@@ -15,10 +15,14 @@ ARG NEXT_PUBLIC_API_URL=http://localhost:3001
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 ENV NEXT_OUTPUT=standalone
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm --filter @htveridoc/web build \
-  && test -f apps/web/.next/standalone/apps/web/server.js \
+# Keep these as separate RUNs so a failed `next build` is not masked by the
+# standalone path check (shell `&&`/`||` would otherwise hide the real error).
+RUN pnpm --filter @htveridoc/web build
+RUN test -f apps/web/.next/standalone/apps/web/server.js \
     -o -f apps/web/.next/standalone/server.js \
-  || (echo "standalone server.js missing" && find apps/web/.next/standalone -maxdepth 3 -type f -name 'server.js' && exit 1)
+  || (echo "standalone server.js missing after successful next build" \
+      && find apps/web/.next -maxdepth 4 -type f -name 'server.js' -print || true \
+      && exit 1)
 
 FROM node:20-bookworm-slim AS runner
 RUN groupadd --system --gid 1001 nodejs \
