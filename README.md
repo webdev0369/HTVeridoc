@@ -108,8 +108,8 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 |---------|--------|--------|
 | Postgres | Railway plugin | Set `DATABASE_URL` on API |
 | Redis | Empty service + Docker image `redis:7-alpine` (no volume) **or** Upstash | Free plan allows **1 volume** (use it for Postgres). Do **not** use Bitnami/Redis templates that attach a second volume. Set `REDIS_URL` on API (BullMQ; Redis 5+). Ephemeral Redis is fine for queues. |
-| API | Dockerfile `apps/api/Dockerfile` or root [`railway.toml`](railway.toml) | Migrations run on boot via `docker/api-entrypoint.sh`. Start command must be `/entrypoint.sh` (not `pnpm …`) — the runtime image has no pnpm. |
-| Web | Dockerfile `apps/web/Dockerfile` or [`railway.web.toml`](railway.web.toml) | Build with `NEXT_PUBLIC_API_URL` = public API URL. Start command must be `node apps/web/server.js` (not `npm`/`pnpm`). No publish directory. If using Nixpacks instead, start stays `pnpm --filter @htveridoc/web start` — do not use `next start` with Docker standalone output. |
+| API | Dockerfile `apps/api/Dockerfile` + [`railway.api.toml`](railway.api.toml) | Config-as-code path **must** be `railway.api.toml` (not a root `railway.toml` — that gets applied to every service and breaks web). Migrations on boot via `/entrypoint.sh`. |
+| Web | Dockerfile `apps/web/Dockerfile` + [`railway.web.toml`](railway.web.toml) | Config-as-code path **must** be `railway.web.toml`. Build with `NEXT_PUBLIC_API_URL` (include `https://`). Start: `node apps/web/server.js`. No publish directory. |
 
 **API listen port:** Railway injects `PORT`. The API uses `PORT` when set, otherwise `API_PORT` (default `3001`). Health check: `GET /health`.
 
@@ -131,7 +131,7 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 
 **Volume:** Attach a persistent volume to the API service at `STORAGE_ROOT` so PDFs survive restarts.
 
-Example configs: API [`railway.toml`](railway.toml) (`healthcheckPath = /health`); Web [`railway.web.toml`](railway.web.toml) (point each service’s Config-as-code file path at the matching file).
+Example configs: API [`railway.api.toml`](railway.api.toml); Web [`railway.web.toml`](railway.web.toml). Set each service’s **Config-as-code** file path explicitly — do not use a root `railway.toml` in a monorepo.
 
 ## Smoke checklist
 
