@@ -103,6 +103,144 @@ function rowHasCodeToTheLeft(
   });
 }
 
+function normalizeArticle(s: string) {
+  return s.replace(/\s+/g, ' ').trim().toLowerCase();
+}
+
+/** Longest article-like hint (prefer item code over short Pos). */
+function primaryArticleHint(hints: string[] | null | undefined): string | null {
+  const ranked = (hints ?? [])
+    .map((h) => h.trim())
+    .filter((h) => h.length >= 3)
+    .sort((a, b) => b.length - a.length);
+  return ranked[0] ?? null;
+}
+
+/** Article / pos tokens on the same visual row, left of `leftOfX`. */
+function articleTokensOnRow(
+  pageItems: PdfTextItem[],
+  lineY: number,
+  lineHeight: number,
+  leftOfX: number,
+): string[] {
+  return pageItems
+    .filter(
+      (item) =>
+        sameVisualLineY(lineY, lineHeight, item) &&
+        item.x < leftOfX - 0.01 &&
+        isPosOrArticleToken(item.str),
+    )
+    .map((item) => item.str.trim())
+    .filter(Boolean);
+}
+
+function findArticleItem(
+  pageItems: PdfTextItem[],
+  article: string,
+): PdfTextItem | null {
+  const needle = normalizeArticle(article);
+  if (!needle) return null;
+  for (const item of pageItems) {
+    if (normalizeArticle(item.str) === needle) return item;
+  }
+  // Split codes e.g. "8950 07"
+  for (let i = 0; i < pageItems.length; i++) {
+    const window: PdfTextItem[] = [pageItems[i]];
+    let joined = normalizeArticle(pageItems[i].str);
+    if (joined === needle) return pageItems[i];
+    for (let j = i + 1; j < Math.min(i + 6, pageItems.length); j++) {
+      if (!sameVisualLine(pageItems[i], pageItems[j])) break;
+      window.push(pageItems[j]);
+      joined = normalizeArticle(window.map((t) => t.str).join(' '));
+      if (joined === needle) return pageItems[i];
+      if (joined.length > needle.length + 8) break;
+    }
+  }
+  return null;
+}
+
+/** First non-code text token to the right of the article on that row. */
+export function descriptionSeedOnArticleRow(
+  pageItems: PdfTextItem[],
+  articleHints: string[] | null | undefined,
+): PdfTextItem | null {
+  const article = primaryArticleHint(articleHints);
+  if (!article) return null;
+  const anchor = findArticleItem(pageItems, article);
+  if (!anchor) return null;
+  const onRow = pageItems
+    .filter(
+      (item) =>
+        sameVisualLine(anchor, item) &&
+        item.x > anchor.x + 0.002 &&
+        !isPosOrArticleToken(item.str) &&
+        item.str.trim() &&
+        !HEADER_LINE.test(item.str.trim()),
+    )
+    .sort((a, b) => a.x - b.x);
+  return onRow[0] ?? null;
+}
+
+/** Nearest long article code (Varenr) to a click — identifies which product row. */
+function nearestArticleToSeed(
+  pageItems: PdfTextItem[],
+  seed: PdfTextItem,
+): string | null {
+  const seedY = seed.y + seed.height / 2;
+  let best: { code: string; dist: number } | null = null;
+  for (const item of pageItems) {
+    const t = item.str.trim();
+    // Item codes are 4+ digits (or split "8950 07"); skip short Pos.
+    if (!/^\d{4,}(?:\s+\d+)*$/.test(t)) continue;
+    const dist = Math.abs(item.y + item.height / 2 - seedY);
+    // Same row or one wrapped name line away.
+    if (dist > Math.max(seed.height, item.height, 0.012) * 3.2) continue;
+    if (!best || dist < best.dist) {
+      best = { code: t, dist };
+    }
+  }
+  return best?.code ?? null;
+}
+
+/**
+ * Description pick locked to the selected line's article row.
+ * Clicks on another product row (different Varenr) retarget to this line's
+ * product name — avoids Line 4 (40302) taking "French Twist" from 35085.
+ */
+export function expandDescriptionPickForLine(
+  seed: PdfTextItem,
+  pageItems: PdfTextItem[],
+  articleHints?: string[] | null,
+): { text: string; box: BoundingBox } {
+  const ourArticle = primaryArticleHint(articleHints);
+  if (!ourArticle) return expandDescriptionPick(seed, pageItems);
+
+  const nearest = nearestArticleToSeed(pageItems, seed);
+  const onForeignRow =
+    nearest != null &&
+    normalizeArticle(nearest) !== normalizeArticle(ourArticle);
+
+  // Also catch same-row left codes when nearest search is ambiguous.
+  const rowArticles = articleTokensOnRow(
+    pageItems,
+    seed.y,
+    seed.height,
+    seed.x + 0.05,
+  );
+  const foreignOnRow = rowArticles.some(
+    (a) =>
+      /^\d{4,}(?:\s+\d+)*$/.test(a) &&
+      normalizeArticle(a) !== normalizeArticle(ourArticle),
+  );
+
+  if (onForeignRow || foreignOnRow) {
+    const retarget = descriptionSeedOnArticleRow(pageItems, articleHints);
+    if (retarget) return expandDescriptionPick(retarget, pageItems);
+  }
+
+  return expandDescriptionPick(seed, pageItems);
+}
+
 /**
  * Expand a Description PDF click into the product-name block at that click:
  * 1) join glyph fragments on the same visual line (to the right of the click)

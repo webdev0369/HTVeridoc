@@ -7,6 +7,14 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { AppShell } from '@/components/app-shell';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { type ProcessingEventDto } from '@/components/processing-log';
 import {
   PdfViewer,
@@ -197,6 +205,9 @@ export default function DocumentDetailPage() {
   });
   const [dirtyTick, setDirtyTick] = useState(0);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [reloadPromptOpen, setReloadPromptOpen] = useState(false);
+  /** Skip native leave dialog after Save/Discard & reload from our modal. */
+  const skipBeforeUnloadRef = useRef(false);
   const hasUnsavedEdits =
     pendingDraftRef.current.fields.size > 0 ||
     pendingDraftRef.current.lines.size > 0;
@@ -407,10 +418,11 @@ export default function DocumentDetailPage() {
 
   useEffect(() => {
     const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (skipBeforeUnloadRef.current) return;
       const payload = buildDraftBatchPayload();
       if (!payload) return;
 
-      // Best-effort save if the user leaves anyway (F5 / close tab).
+      // Best-effort save if the user leaves via browser chrome / close tab.
       try {
         const accessToken =
           typeof window !== 'undefined'
@@ -440,6 +452,48 @@ export default function DocumentDetailPage() {
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- id + draft helpers
   }, [id]);
+
+  // Custom modal for F5 / Ctrl+R (browser cannot show a custom UI for the
+  // toolbar reload button — that still uses the native leave dialog).
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      const isRefresh =
+        e.key === 'F5' ||
+        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'r');
+      if (!isRefresh) return;
+      if (
+        pendingDraftRef.current.fields.size === 0 &&
+        pendingDraftRef.current.lines.size === 0
+      ) {
+        return;
+      }
+      e.preventDefault();
+      setReloadPromptOpen(true);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    return () => window.removeEventListener('keydown', onKeyDown, true);
+  }, []);
+
+  const reloadAfterSave = async () => {
+    setSavingDraft(true);
+    try {
+      await flushPendingEdits();
+      toast.success('Edits saved');
+      skipBeforeUnloadRef.current = true;
+      window.location.reload();
+    } catch (err) {
+      toast.error(
+        err instanceof ApiError ? err.message : 'Failed to save edits',
+      );
+      setSavingDraft(false);
+    }
+  };
+
+  const reloadAfterDiscard = () => {
+    clearPendingDraft();
+    skipBeforeUnloadRef.current = true;
+    window.location.reload();
+  };
 
   const afterExtractionEdit = (extraction: ExtractionDto) => {
     queryClient.setQueryData<ExtractionDto>(['extraction', id], (prev) => {
@@ -1455,6 +1509,43 @@ export default function DocumentDetailPage() {
           </div>
         </div>
       ) : null}
+
+      <Dialog open={reloadPromptOpen} onOpenChange={setReloadPromptOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Unsaved edits</DialogTitle>
+            <DialogDescription>
+              You have unsaved cell edits. Save them before reloading, discard
+              them, or stay on this page.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col gap-2 sm:flex-row sm:justify-end">
+            <Button
+              type="button"
+              variant="outline"
+              disabled={savingDraft}
+              onClick={() => setReloadPromptOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={savingDraft}
+              onClick={reloadAfterDiscard}
+            >
+              Discard & reload
+            </Button>
+            <Button
+              type="button"
+              disabled={savingDraft}
+              onClick={() => void reloadAfterSave()}
+            >
+              {savingDraft ? 'Saving…' : 'Save & reload'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

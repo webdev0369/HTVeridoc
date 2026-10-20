@@ -15,7 +15,11 @@ import {
   sameCalendarDate,
   type DateParts,
 } from '@/lib/date-format';
-import { expandDescriptionPick } from '@/lib/description-pick';
+import {
+  descriptionSeedOnArticleRow,
+  expandDescriptionPick,
+  expandDescriptionPickForLine,
+} from '@/lib/description-pick';
 import type { BoundingBox } from '@/lib/types';
 
 export type HighlightTone = 'ai' | 'edited' | 'error';
@@ -766,6 +770,27 @@ function findDateValueBoxes(
   return [hits[0].box];
 }
 
+/** Product-name box on the same PDF row as this line's item code. */
+function descriptionBandOnAnchorRow(
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): BoundingBox | null {
+  const seed = descriptionSeedOnArticleRow(textItems, hints);
+  if (!seed) return null;
+  return expandDescriptionPick(seed, textItems).box;
+}
+
+function boxNearAnchorRow(
+  box: BoundingBox,
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): boolean {
+  const anchorY = findAnchorY(textItems, hints);
+  if (anchorY == null) return true;
+  const band = 0.045;
+  return Math.abs(boxCenterY(box) - anchorY) <= band;
+}
+
 /** Resolve highlight / popup anchor for a selection on a page. */
 function resolveHighlightBoxes(
   textItems: PdfTextItem[],
@@ -775,6 +800,7 @@ function resolveHighlightBoxes(
   const rawValue = (highlight.value ?? '').trim();
   const role = highlight.role ?? 'other';
   const preferRight = role === 'quantity' || role === 'price';
+  const isDescription = role === 'text';
 
   // Dates: normalize in storage (ISO) but locate the printed form on the PDF.
   const dateParts = parseDateParts(rawValue);
@@ -784,6 +810,39 @@ function resolveHighlightBoxes(
       anchorHints: highlight.anchorHints,
     });
     if (dateBoxes.length > 0) return dateBoxes;
+  }
+
+  // Description: keep the ring on this line's product name — never on Varenr.
+  if (isDescription && highlight.anchorHints?.length) {
+    const fromText = findValueBoxes(textItems, highlight.value, {
+      near: highlight.boundingBox,
+      anchorHints: highlight.anchorHints,
+    });
+    if (
+      fromText.length > 0 &&
+      boxNearAnchorRow(fromText[0], textItems, highlight.anchorHints)
+    ) {
+      return fromText;
+    }
+    const onRow = descriptionBandOnAnchorRow(
+      textItems,
+      highlight.anchorHints,
+    );
+    if (onRow) return [onRow];
+    if (
+      highlight.boundingBox &&
+      boxNearAnchorRow(
+        highlight.boundingBox,
+        textItems,
+        highlight.anchorHints,
+      )
+    ) {
+      return [highlight.boundingBox];
+    }
+    // Stale value from another row — still prefer this row's name band above.
+    if (fromText.length > 0) return fromText;
+    if (highlight.boundingBox) return [highlight.boundingBox];
+    return [];
   }
 
   // Numeric fields (stocktaking qty, prices, …): find the value on *this*
@@ -843,6 +902,7 @@ function resolveHighlightBoxes(
   }
 
   // Last resort: park on article/position so we stay on the correct row.
+  // (Description handled above — never lands on Varenr alone.)
   const anchor = findAnchorBox(textItems, highlight.anchorHints);
   if (anchor) return [anchor];
   if (highlight.boundingBox) {
@@ -1378,9 +1438,12 @@ export function PdfViewer({
                         }
                         if (!onValuePick) return;
                         if (appendPickHint) {
-                          const expanded = expandDescriptionPick(
+                          // Lock to this line's article row so a click on the
+                          // product above/below cannot steal the wrong name.
+                          const expanded = expandDescriptionPickForLine(
                             seed,
                             pageView.textItems,
+                            highlight?.anchorHints,
                           );
                           onValuePick(expanded.text, expanded.box, {
                             append: e.shiftKey,
