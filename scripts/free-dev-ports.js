@@ -6,7 +6,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-const PORTS = [3000, 3001, 3002];
+const PORTS = [3000, 3001, 3002, 8080];
 
 function killPort(port) {
   if (process.platform === 'win32') {

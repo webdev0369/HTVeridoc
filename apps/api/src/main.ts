@@ -9,7 +9,7 @@ async function bootstrap() {
   });
 
   const config = app.get(ConfigService);
-  const corsOrigin = config.get<string>('CORS_ORIGIN', 'http://localhost:3000');
+  const corsOrigin = config.get<string>('CORS_ORIGIN', 'http://localhost:3000,http://localhost:8080');
 
   app.enableCors({
     origin: corsOrigin.split(',').map((o) => o.trim()),

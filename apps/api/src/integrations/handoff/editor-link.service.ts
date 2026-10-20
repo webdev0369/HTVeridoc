@@ -29,8 +29,8 @@ export class EditorLinkService {
     return (
       this.config.get<string>('PUBLIC_WEB_URL') ||
       this.config.get<string>('CORS_ORIGIN') ||
-      'http://localhost:3000'
-    ).replace(/\/$/, '');
+      'http://localhost:3000,http://localhost:8080'
+    ).split(',').map((o) => o.trim()).join(',').replace(/\/$/, '');
   }
 
   /**

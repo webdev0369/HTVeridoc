@@ -3,12 +3,12 @@ set -eu
 
 # Next standalone layout differs slightly by version; prefer monorepo path.
 if [ -f apps/web/server.js ]; then
-  echo "[web] Starting Next standalone (apps/web/server.js) on PORT=${PORT:-3000}"
+  echo "[web] Starting Next standalone (apps/web/server.js) on PORT=${PORT:-8080}"
   exec node apps/web/server.js
 fi
 
 if [ -f server.js ]; then
-  echo "[web] Starting Next standalone (server.js) on PORT=${PORT:-3000}"
+  echo "[web] Starting Next standalone (server.js) on PORT=${PORT:-8080}"
   exec node server.js
 fi
 

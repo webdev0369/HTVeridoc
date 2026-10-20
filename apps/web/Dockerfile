@@ -31,7 +31,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 # Railway injects PORT at runtime; 3000 is only the local/Docker default.
-ENV PORT=3000
+ENV PORT=8080
 ENV HOSTNAME=0.0.0.0
 COPY --from=build --chown=nextjs:nodejs /app/apps/web/public ./apps/web/public
 COPY --from=build --chown=nextjs:nodejs /app/apps/web/.next/standalone ./
@@ -39,7 +39,7 @@ COPY --from=build --chown=nextjs:nodejs /app/apps/web/.next/static ./apps/web/.n
 COPY --chown=nextjs:nodejs docker/web-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 USER nextjs
-EXPOSE 3000
+EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD node -e "const p=process.env.PORT||3000;fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+  CMD node -e "const p=process.env.PORT||8080;fetch('http://127.0.0.1:'+p+'/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["/entrypoint.sh"]

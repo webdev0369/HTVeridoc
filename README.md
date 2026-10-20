@@ -72,7 +72,7 @@ node scripts/dev.js
 
 # If your shell is already Node 20+, these also work:
 pnpm dev:api   # http://localhost:3001
-pnpm dev:web   # http://localhost:3000
+pnpm dev:web   # http://localhost:3000.http://localhost:8080.
 pnpm dev       # runs node scripts/dev.js
 ```
 
@@ -88,7 +88,7 @@ cp .env.docker.example .env
 docker compose up --build -d
 ```
 
-- Web: http://localhost:3000  
+- Web: http://localhost:3000,http://localhost:8080
 - API: http://localhost:3001/health  
 
 `NEXT_PUBLIC_API_URL` and `CORS_ORIGIN` must be URLs the **browser** can reach (e.g. your VPS domain), not Docker service names. Rebuild the web image after changing `NEXT_PUBLIC_API_URL`.
@@ -134,7 +134,7 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 Example configs: API [`railway.api.toml`](railway.api.toml); Web [`railway.web.toml`](railway.web.toml). Set each service’s **Config-as-code** file path explicitly — do not use a root `railway.toml` in a monorepo.
 
 ## Smoke checklist
-
+<!-- http://localhost:8080,http://localhost:3000 -->
 1. Open http://localhost:3000/register and create an organization + admin user.
 2. Confirm `GET http://localhost:3001/health` returns `{ status: "ok" }`.
 3. Upload a PDF on **Documents**.

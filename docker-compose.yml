@@ -44,7 +44,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
       REDIS_URL: redis://redis:6379
       STORAGE_ROOT: /data/storage
-      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000,http://localhost:8080}
     volumes:
       - storage_data:/data/storage
     ports:
@@ -65,7 +65,7 @@ services:
     environment:
       NODE_ENV: production
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      - "${WEB_PORT:-8080}:8080"
     depends_on:
       api:
         condition: service_healthy

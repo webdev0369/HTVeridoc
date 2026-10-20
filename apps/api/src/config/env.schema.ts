@@ -14,7 +14,7 @@ export const envSchema = z.object({
   JWT_REFRESH_TTL: z.string().default('7d'),
   STORAGE_ROOT: z.string().default('./storage/htveridoc'),
   MAX_UPLOAD_BYTES: z.coerce.number().default(26_214_400),
-  CORS_ORIGIN: z.string().default('http://localhost:3000'),
+  CORS_ORIGIN: z.string().default('http://localhost:3000,http://localhost:8080'),
   /** Public web origin for editor links in webhooks (defaults to CORS_ORIGIN). */
   PUBLIC_WEB_URL: z.string().optional(),
   /** Public API base URL shown on Integration credentials (defaults to localhost:API_PORT). */
