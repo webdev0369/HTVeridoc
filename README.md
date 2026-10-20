@@ -129,6 +129,8 @@ Ship readiness (config + env). Create **four services** (or use Railway Postgres
 - `NEXT_PUBLIC_API_URL` = public API URL (rebuild after change)
 - `EDITOR_FRAME_ANCESTORS` = comma-separated partner origins allowed to iframe the editor (see `apps/web/next.config.ts`)
 
+**Seed (roles/permissions):** API Docker entrypoint runs `node dist/database/seed.js` after migrations (idempotent). To run once manually on Railway: open **API → Console** (or `railway run` / one-off command) and execute `node dist/database/seed.js` inside the API container. Do not use `pnpm seed` in production — that needs `ts-node` / source files.
+
 **Volume:** Attach a persistent volume to the API service at `STORAGE_ROOT` so PDFs survive restarts.
 
 Example configs: API [`railway.api.toml`](railway.api.toml); Web [`railway.web.toml`](railway.web.toml). Set each service’s **Config-as-code** file path explicitly — do not use a root `railway.toml` in a monorepo.

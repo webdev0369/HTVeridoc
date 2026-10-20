@@ -12,5 +12,12 @@ if ! node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-sour
   exit 1
 fi
 
+# Idempotent: roles/permissions (fixes "Roles not seeded" on register).
+echo "[api] Seeding roles and permissions..."
+if ! node dist/database/seed.js; then
+  echo "[api] ERROR: seed failed."
+  exit 1
+fi
+
 echo "[api] Starting NestJS..."
 exec node dist/main.js
