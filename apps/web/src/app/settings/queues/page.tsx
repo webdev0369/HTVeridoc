@@ -3,7 +3,14 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Inbox, Loader2, Pencil, Plus, Archive } from 'lucide-react';
+import {
+  Archive,
+  ArchiveRestore,
+  Inbox,
+  Loader2,
+  Pencil,
+  Plus,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import { AppShell } from '@/components/app-shell';
 import { Badge } from '@/components/ui/badge';
@@ -81,6 +88,11 @@ export default function QueueManagerSettingsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<QueueForm>(emptyForm());
   const [formError, setFormError] = useState<string | null>(null);
+  const [archiveTarget, setArchiveTarget] = useState<DocumentQueueDto | null>(
+    null,
+  );
+  const [unarchiveTarget, setUnarchiveTarget] =
+    useState<DocumentQueueDto | null>(null);
 
   const queuesQuery = useQuery({
     queryKey: ['document-queues', { includeInactive: canManage }],
@@ -141,10 +153,27 @@ export default function QueueManagerSettingsPage() {
       apiFetch<DocumentQueueDto>(`/document-queues/${id}`, { method: 'DELETE' }),
     onSuccess: () => {
       toast.success('Queue archived');
+      setArchiveTarget(null);
       void queryClient.invalidateQueries({ queryKey: ['document-queues'] });
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : 'Archive failed');
+    },
+  });
+
+  const unarchiveMutation = useMutation({
+    mutationFn: (id: string) =>
+      apiFetch<DocumentQueueDto>(`/document-queues/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isActive: true }),
+      }),
+    onSuccess: () => {
+      toast.success('Queue restored');
+      setUnarchiveTarget(null);
+      void queryClient.invalidateQueries({ queryKey: ['document-queues'] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof ApiError ? err.message : 'Unarchive failed');
     },
   });
 
@@ -301,12 +330,21 @@ export default function QueueManagerSettingsPage() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                disabled={archiveMutation.isPending}
-                                onClick={() => archiveMutation.mutate(q.id)}
+                                title="Archive queue"
+                                onClick={() => setArchiveTarget(q)}
                               >
                                 <Archive className="h-4 w-4" aria-hidden />
                               </Button>
-                            ) : null}
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                title="Unarchive queue"
+                                onClick={() => setUnarchiveTarget(q)}
+                              >
+                                <ArchiveRestore className="h-4 w-4" aria-hidden />
+                              </Button>
+                            )}
                           </div>
                         ) : null}
                       </TableCell>
@@ -446,6 +484,85 @@ export default function QueueManagerSettingsPage() {
                 <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
               ) : null}
               {editingId ? 'Save' : 'Create'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(archiveTarget)}
+        onOpenChange={(open) => {
+          if (!open && !archiveMutation.isPending) setArchiveTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Archive queue?</DialogTitle>
+            <DialogDescription>
+              {archiveTarget
+                ? `“${archiveTarget.name}” will be archived and hidden from new uploads. Existing documents stay available.`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={archiveMutation.isPending}
+              onClick={() => setArchiveTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={archiveMutation.isPending || !archiveTarget}
+              onClick={() => {
+                if (archiveTarget) archiveMutation.mutate(archiveTarget.id);
+              }}
+            >
+              {archiveMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : null}
+              Archive
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(unarchiveTarget)}
+        onOpenChange={(open) => {
+          if (!open && !unarchiveMutation.isPending) setUnarchiveTarget(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Unarchive queue?</DialogTitle>
+            <DialogDescription>
+              {unarchiveTarget
+                ? `“${unarchiveTarget.name}” will be restored and available for new uploads again.`
+                : null}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={unarchiveMutation.isPending}
+              onClick={() => setUnarchiveTarget(null)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={unarchiveMutation.isPending || !unarchiveTarget}
+              onClick={() => {
+                if (unarchiveTarget) {
+                  unarchiveMutation.mutate(unarchiveTarget.id);
+                }
+              }}
+            >
+              {unarchiveMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+              ) : null}
+              Unarchive
             </Button>
           </DialogFooter>
         </DialogContent>
