@@ -213,9 +213,35 @@ export function descriptionSeedOnArticleRow(
 }
 
 /**
- * Description pick for a selected line.
- * Always expands at the clicked seed — user click wins over article-row locking
- * (retargeting previously blocked footer notes and off-row corrections).
+ * Nearest long article / Varenr code to a click — identifies which product row.
+ * Used so a description click can switch to that line instead of overwriting
+ * whichever line was previously selected.
+ */
+export function nearestArticleToSeed(
+  pageItems: PdfTextItem[],
+  seed: PdfTextItem,
+): string | null {
+  const seedY = seed.y + seed.height / 2;
+  let best: { code: string; dist: number } | null = null;
+  for (const item of pageItems) {
+    const t = item.str.trim();
+    // Item codes are 4+ digits (or split "8950 07"); skip short Pos.
+    if (!/^\d{4,}(?:\s+\d+)*$/.test(t)) continue;
+    if (isOtherColumnToken(t)) continue;
+    const dist = Math.abs(item.y + item.height / 2 - seedY);
+    // Same row or one wrapped name line away.
+    if (dist > Math.max(seed.height, item.height, 0.012) * 3.2) continue;
+    // Prefer codes to the left of / near the description band.
+    if (item.x > seed.x + 0.12) continue;
+    if (!best || dist < best.dist) {
+      best = { code: t, dist };
+    }
+  }
+  return best?.code ?? null;
+}
+
+/**
+ * Description pick for a selected line — expands at the clicked seed.
  */
 export function expandDescriptionPickForLine(
   seed: PdfTextItem,

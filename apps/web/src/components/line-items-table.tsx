@@ -880,7 +880,11 @@ function LineRow({
         }}
         className={`w-full min-w-0 truncate border-0 bg-transparent py-0.5 text-sm text-white outline-none placeholder:text-slate-600 focus:text-white ${
           align === 'right' ? 'text-right' : 'text-left'
-        } ${active ? 'rounded bg-[#3b82f6]/20 px-1' : ''}`}
+        } ${
+          active
+            ? 'rounded bg-[#3b82f6]/35 px-1 ring-1 ring-[#3b82f6]/70'
+            : ''
+        }`}
       />
     ) : (
       <span
@@ -891,8 +895,9 @@ function LineRow({
     );
   };
 
+  // Soft row tint only — the active *cell* carries the strong highlight.
   const rowBg = selected
-    ? 'bg-[#1a4d8c]/45'
+    ? 'bg-[#1a4d8c]/15'
     : issue
       ? 'bg-rose-950/40'
       : line.lineType === 'CANCELLED'
@@ -906,7 +911,7 @@ function LineRow({
         ? 'hover:bg-rose-950/30'
         : 'hover:bg-white/[0.03]';
   const actionBg = selected
-    ? 'bg-[#163a66]'
+    ? 'bg-[#121826]'
     : issue
       ? 'bg-[#2a1218]'
       : line.lineType === 'CANCELLED'
@@ -914,12 +919,11 @@ function LineRow({
         : 'bg-[#0f1419]';
 
   return (
-    <tr
-      onClick={() => onSelectColumn('description')}
-      title={issue?.message}
-      className={`cursor-pointer transition ${rowBg} ${rowHover}`}
-    >
-      <td className="overflow-hidden border-b border-white/5 px-3 py-2.5 text-xs text-slate-500">
+    <tr title={issue?.message} className={`transition ${rowBg} ${rowHover}`}>
+      <td
+        className="overflow-hidden border-b border-white/5 px-3 py-2.5 text-xs text-slate-500"
+        onClick={() => onSelectColumn('description')}
+      >
         {line.position ?? '—'}
       </td>
       <td

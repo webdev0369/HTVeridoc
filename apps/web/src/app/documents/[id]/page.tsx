@@ -959,6 +959,8 @@ export default function DocumentDetailPage() {
           ? mergePickBoxes(selection.boundingBox, box)
           : (box ?? selection.boundingBox);
 
+      // Always apply to the *currently selected* line (e.g. Line 9 Description
+      // stays Line 9 even if the PDF click is on Line 2's product name).
       const patch = lineColumnToPatch(selection.column, nextText);
       queueLineEdit(selection.id, patch);
       if (selection.column !== 'description') {

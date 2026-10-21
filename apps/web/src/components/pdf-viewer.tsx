@@ -1559,9 +1559,8 @@ export function PdfViewer({
                         }
                         if (!onValuePick) return;
                         if (appendPickHint) {
-                          // Trust the click: expand the name/note at that spot.
-                          // Do not retarget to the line's article row (that blocked
-                          // footer / off-row corrections).
+                          // Expand at click; value always goes to the selected
+                          // line (e.g. Line 9 can take Line 2's PDF name).
                           const expanded = expandDescriptionPick(
                             seed,
                             pageView.textItems,
@@ -1720,7 +1719,7 @@ function HighlightPopup({
       </p>
       <p className="pointer-events-none mt-1 px-0.5 text-[11px] text-slate-500">
         {appendPickHint
-          ? 'Click text on the PDF to set this description (replaces). Shift+click to add more, then ✓'
+          ? 'Click any product name on the PDF to set this line’s description (replaces). Shift+click to add more, then ✓'
           : 'Type the correct value, or click it on the PDF, then press ✓'}
       </p>
       {!anchorBox && (
