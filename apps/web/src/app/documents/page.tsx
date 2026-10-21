@@ -177,7 +177,7 @@ export default function DocumentsPage() {
                     {(typesQuery.data ?? [
                       {
                         documentType: 'PURCHASE_ORDER_CONFIRMATION',
-                        label: 'Purchase order confirmation',
+                        label: 'Purchase order',
                         extractionSupported: true,
                       },
                     ]).map((t) => (

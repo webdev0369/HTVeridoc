@@ -5,10 +5,25 @@ Document-processing platform (Phases 1–3): multi-tenant auth, PDF upload/stora
 ## Stack
 
 - **Web:** Next.js + TypeScript + Tailwind + TanStack Query + PDF.js
-- **API:** NestJS + TypeORM + PostgreSQL + Redis/BullMQ (connection only)
+- **API (microservices):** five Nest apps — `identity`, `documents`, `processing`, `review`, `integrations` — plus `gateway`
+- **Shared packages:** `@htveridoc/shared`, `@htveridoc/db`, `@htveridoc/domains`
 - **Storage:** local filesystem under `storage/htveridoc`
 
-Docker is **not** required for local development. For a full stack deploy (API + web + Postgres + Redis + persistent PDF storage), use Docker Compose below.
+Docker is **not** required for local development. For a full stack deploy (gateway + five APIs + web + Postgres + Redis + persistent PDF storage), use Docker Compose below.
+
+### Repo layout
+
+```text
+apps/
+  api/
+    identity|documents|processing|review|integrations  # :3011–:3015
+    gateway                                            # public API :3001
+  web/                                                 # :3000
+packages/
+  shared/    # config, storage, health, JWT verify
+  db/        # entities, migrations, seed
+  domains/   # Nest domain modules (loaded per service)
+```
 
 ## Prerequisites
 
@@ -66,21 +81,19 @@ pnpm seed
 ## Run
 
 ```bash
-# Preferred when global Node is 16 (Windows nvm):
-node scripts/dev.js
-# or:  dev.cmd   /   bash dev.sh
-
-# If your shell is already Node 20+, these also work:
-pnpm dev:api   # http://localhost:3001
-pnpm dev:web   # http://localhost:3000
-pnpm dev       # runs node scripts/dev.js
+# Gateway (:3001) + 5 API services (:3011–:3015) + web (:3000)
+pnpm dev
+# or: node scripts/dev.js   /   dev.cmd   /   bash dev.sh
 ```
 
-`dev.js` / `with-project-node.js` pin Node 20 for this repo only so Gemini (`@google/genai`) works without flipping global nvm.
+Swagger per service: `http://localhost:3011/docs` … `http://localhost:3015/docs`  
+Gateway: `http://localhost:3001`
+
+`with-project-node.js` pins Node 20 for this repo only so Gemini (`@google/genai`) works without flipping global nvm.
 
 ## Deploy with Docker (full system)
 
-Requires Docker Compose. This starts **Postgres**, **Redis**, **API** (runs migrations on boot), and **Web**, with a named volume for PDF storage.
+Requires Docker Compose. This starts **Postgres**, **Redis**, **gateway + five API microservices** (identity runs migrations on boot), and **Web**, with a named volume for PDF storage.
 
 ```bash
 cp .env.docker.example .env
@@ -102,37 +115,20 @@ On a VPS: install Docker, copy the repo, set `.env` with your public hostnames/H
 
 ## Deploy on Railway
 
-Ship readiness (config + env). Create **four services** (or use Railway Postgres/Redis plugins):
+Prefer Docker Compose for the full microservice stack. On Railway, deploy **one service per Nest app** under `apps/api/<name>` (plus web), or use Compose on a VPS.
 
 | Service | Source | Notes |
 |---------|--------|--------|
-| Postgres | Railway plugin | Set `DATABASE_URL` on API |
-| Redis | Empty service + Docker image `redis:7-alpine` (no volume) **or** Upstash | Free plan allows **1 volume** (use it for Postgres). Do **not** use Bitnami/Redis templates that attach a second volume. Set `REDIS_URL` on API (BullMQ; Redis 5+). Ephemeral Redis is fine for queues. |
-| API | Dockerfile `apps/api/Dockerfile` or root [`railway.toml`](railway.toml) | Migrations run on boot via `docker/api-entrypoint.sh`. Start command must be `/entrypoint.sh` (not `pnpm …`) — the runtime image has no pnpm. |
-| Web | Dockerfile `apps/web/Dockerfile` or [`railway.web.toml`](railway.web.toml) | Build with `NEXT_PUBLIC_API_URL` = public API URL. Start command must be `node apps/web/server.js` (not `npm`/`pnpm`). No publish directory. If using Nixpacks instead, start stays `pnpm --filter @htveridoc/web start` — do not use `next start` with Docker standalone output. |
+| Postgres | Railway plugin | Shared `DATABASE_URL` on every API service |
+| Redis | Empty service + `redis:7-alpine` **or** Upstash | Set `REDIS_URL` on APIs (BullMQ; Redis 5+) |
+| APIs | `apps/api/identity` … `integrations` (+ optional `gateway`) | Set `APP_NAME` per service. Run migrations on **identity** (`RUN_MIGRATIONS=true`) via `docker/api-entrypoint.sh` |
+| Web | `apps/web/Dockerfile` or [`railway.web.toml`](railway.web.toml) | Build with `NEXT_PUBLIC_API_URL` = public gateway/API URL |
 
-**API listen port:** Railway injects `PORT`. The API uses `PORT` when set, otherwise `API_PORT` (default `3001`). Health check: `GET /health`.
+**Listen port:** platforms inject `PORT` (else `API_PORT`). Health: `GET /health`.
 
-**Required API env (production):**
+**Required API env:** `DATABASE_URL`, `REDIS_URL`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `CORS_ORIGIN`, `PUBLIC_WEB_URL`, `PUBLIC_API_URL`, `GEMINI_API_KEY`, `INTEGRATIONS_SECRET_KEY`, `STORAGE_ROOT` (volume mount).
 
-- `DATABASE_URL`, `REDIS_URL`
-- `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET` (long random strings)
-- `CORS_ORIGIN` = public web origin (comma-separated if multiple)
-- `PUBLIC_WEB_URL` = same public web origin (editor links in webhooks)
-- `PUBLIC_API_URL` = public API origin (credentials UI)
-- `GEMINI_API_KEY` (+ optional `GEMINI_MODEL`)
-- `INTEGRATIONS_SECRET_KEY` (preferred over falling back to JWT secret)
-- `STORAGE_ROOT` = volume mount path (e.g. `/data/storage`)
-
-**Web env:**
-
-- `NEXT_PUBLIC_API_URL` = public API URL (rebuild after change)
-- `EDITOR_FRAME_ANCESTORS` = comma-separated partner origins allowed to iframe the editor (see `apps/web/next.config.ts`)
-
-**Volume:** Attach a persistent volume to the API service at `STORAGE_ROOT` so PDFs survive restarts.
-
-Example configs: API [`railway.toml`](railway.toml) (`healthcheckPath = /health`); Web [`railway.web.toml`](railway.web.toml) (point each service’s Config-as-code file path at the matching file).
-
+**Web env:** `NEXT_PUBLIC_API_URL`; optional `EDITOR_FRAME_ANCESTORS` (see `apps/web/next.config.ts`).
 ## Smoke checklist
 
 1. Open http://localhost:3000/register and create an organization + admin user.

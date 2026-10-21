@@ -12,6 +12,14 @@ const HEADER_LINE =
 /** New table row starting with Pos + article, e.g. "20 343769". */
 const NEW_POS_ARTICLE = /^\d{1,4}\s+\d{3,}/;
 
+/**
+ * Qty / pack / unit / price / amount cells on the same visual row as the
+ * product name — must not enter description text or the highlight box.
+ * (Bare integers like "7" in "7kg" stay allowed; column gaps stop those.)
+ */
+const OTHER_COLUMN_TOKEN =
+  /^(?:-?\d{1,3}(?:[.\s]\d{3})+[.,]\d{2}|-?\d+[.,]\d{2}|\d{1,3}%|PK|STK?|KRT|CS|FL|EA|PCE|PCS|BOX|CSE|SKK|RLL|POS|ENH|D|%|NOK|EUR|SEK|DKK|CHF|GBP|USD)$/i;
+
 function sameVisualLine(a: PdfTextItem, b: PdfTextItem) {
   return Math.abs(b.y - a.y) <= Math.max(a.height, b.height, 0.012) * 1.6;
 }
@@ -26,6 +34,18 @@ function isPosOrArticleToken(str: string) {
   if (/^\d{1,3}$/.test(t)) return true;
   if (/^\d{4,}$/.test(t)) return true;
   if (/^\d{4,}(?:\s+\d+)+$/.test(t)) return true;
+  return false;
+}
+
+/** True for clear table cells to the right of Artikkelbeskrivelse. */
+function isOtherColumnToken(str: string) {
+  const t = str.trim();
+  if (!t) return true;
+  if (OTHER_COLUMN_TOKEN.test(t)) return true;
+  // Glued qty+pack unit only (not "57cm" / "7kg" product sizes).
+  if (/^\d{1,6}([.,]\d{1,3})?(PK|STK?|KRT|CS|FL|EA|PCE|PCS|BOX|D)$/i.test(t)) {
+    return true;
+  }
   return false;
 }
 
@@ -64,22 +84,50 @@ function filterLineForDescription(
   isSeedLine: boolean,
 ): PdfTextItem[] {
   const seedLeft = seed.x;
+  const sorted = [...rawLine].sort((a, b) => a.x - b.x);
+
   if (isSeedLine) {
-    // Same line: take the clicked fragment and text to its right (full name).
-    return rawLine.filter((item) => {
-      if (isPosOrArticleToken(item.str) && item.x < seedLeft - 0.005) {
-        return false;
+    // Same line: product-name tokens only — stop before qty/price columns.
+    const out: PdfTextItem[] = [];
+    let passedSeed = false;
+    for (const item of sorted) {
+      const t = item.str.trim();
+      if (!t || HEADER_LINE.test(t)) {
+        if (passedSeed) break;
+        continue;
       }
-      if (item.x >= seedLeft - 0.008) return true;
-      if (sameVisualLine(item, seed) && !isPosOrArticleToken(item.str)) {
-        return item.x + item.width >= seedLeft - 0.01;
+      if (isPosOrArticleToken(t) && item.x < seedLeft - 0.005) continue;
+      if (isOtherColumnToken(t)) {
+        // Reached Kvt / Pakning / Pris / Beløp — end of description band.
+        if (passedSeed || item.x >= seedLeft - 0.008) break;
+        continue;
       }
-      return false;
-    });
+      const overlapsSeed =
+        item.x >= seedLeft - 0.008 ||
+        (sameVisualLine(item, seed) &&
+          !isPosOrArticleToken(t) &&
+          item.x + item.width >= seedLeft - 0.01);
+      if (!overlapsSeed && !passedSeed) continue;
+
+      // Column gap before a bare number ⇒ qty column, not "7kg" size text.
+      if (passedSeed && out.length && /^\d{1,5}$/.test(t)) {
+        const prev = out[out.length - 1];
+        const gap = item.x - (prev.x + prev.width);
+        if (gap > Math.max(0.018, prev.height * 1.8)) break;
+      }
+
+      out.push(item);
+      passedSeed = true;
+    }
+    return out;
   }
-  return rawLine.filter(
-    (item) => !isPosOrArticleToken(item.str) || item.x >= seedLeft,
-  );
+
+  return sorted.filter((item) => {
+    const t = item.str.trim();
+    if (!t || HEADER_LINE.test(t) || isOtherColumnToken(t)) return false;
+    if (isPosOrArticleToken(t) && item.x < seedLeft) return false;
+    return true;
+  });
 }
 
 function shouldStopLine(text: string) {
@@ -114,24 +162,6 @@ function primaryArticleHint(hints: string[] | null | undefined): string | null {
     .filter((h) => h.length >= 3)
     .sort((a, b) => b.length - a.length);
   return ranked[0] ?? null;
-}
-
-/** Article / pos tokens on the same visual row, left of `leftOfX`. */
-function articleTokensOnRow(
-  pageItems: PdfTextItem[],
-  lineY: number,
-  lineHeight: number,
-  leftOfX: number,
-): string[] {
-  return pageItems
-    .filter(
-      (item) =>
-        sameVisualLineY(lineY, lineHeight, item) &&
-        item.x < leftOfX - 0.01 &&
-        isPosOrArticleToken(item.str),
-    )
-    .map((item) => item.str.trim())
-    .filter(Boolean);
 }
 
 function findArticleItem(
@@ -174,6 +204,7 @@ export function descriptionSeedOnArticleRow(
         sameVisualLine(anchor, item) &&
         item.x > anchor.x + 0.002 &&
         !isPosOrArticleToken(item.str) &&
+        !isOtherColumnToken(item.str) &&
         item.str.trim() &&
         !HEADER_LINE.test(item.str.trim()),
     )
@@ -181,63 +212,16 @@ export function descriptionSeedOnArticleRow(
   return onRow[0] ?? null;
 }
 
-/** Nearest long article code (Varenr) to a click — identifies which product row. */
-function nearestArticleToSeed(
-  pageItems: PdfTextItem[],
-  seed: PdfTextItem,
-): string | null {
-  const seedY = seed.y + seed.height / 2;
-  let best: { code: string; dist: number } | null = null;
-  for (const item of pageItems) {
-    const t = item.str.trim();
-    // Item codes are 4+ digits (or split "8950 07"); skip short Pos.
-    if (!/^\d{4,}(?:\s+\d+)*$/.test(t)) continue;
-    const dist = Math.abs(item.y + item.height / 2 - seedY);
-    // Same row or one wrapped name line away.
-    if (dist > Math.max(seed.height, item.height, 0.012) * 3.2) continue;
-    if (!best || dist < best.dist) {
-      best = { code: t, dist };
-    }
-  }
-  return best?.code ?? null;
-}
-
 /**
- * Description pick locked to the selected line's article row.
- * Clicks on another product row (different Varenr) retarget to this line's
- * product name — avoids Line 4 (40302) taking "French Twist" from 35085.
+ * Description pick for a selected line.
+ * Always expands at the clicked seed — user click wins over article-row locking
+ * (retargeting previously blocked footer notes and off-row corrections).
  */
 export function expandDescriptionPickForLine(
   seed: PdfTextItem,
   pageItems: PdfTextItem[],
-  articleHints?: string[] | null,
+  _articleHints?: string[] | null,
 ): { text: string; box: BoundingBox } {
-  const ourArticle = primaryArticleHint(articleHints);
-  if (!ourArticle) return expandDescriptionPick(seed, pageItems);
-
-  const nearest = nearestArticleToSeed(pageItems, seed);
-  const onForeignRow =
-    nearest != null &&
-    normalizeArticle(nearest) !== normalizeArticle(ourArticle);
-
-  // Also catch same-row left codes when nearest search is ambiguous.
-  const rowArticles = articleTokensOnRow(
-    pageItems,
-    seed.y,
-    seed.height,
-    seed.x + 0.05,
-  );
-  const foreignOnRow = rowArticles.some(
-    (a) =>
-      /^\d{4,}(?:\s+\d+)*$/.test(a) &&
-      normalizeArticle(a) !== normalizeArticle(ourArticle),
-  );
-
-  if (onForeignRow || foreignOnRow) {
-    const retarget = descriptionSeedOnArticleRow(pageItems, articleHints);
-    if (retarget) return expandDescriptionPick(retarget, pageItems);
-  }
-
   return expandDescriptionPick(seed, pageItems);
 }
 
@@ -253,7 +237,8 @@ export function expandDescriptionPick(
 ): { text: string; box: BoundingBox } {
   const seedLeft = seed.x;
   const bandLeft = seedLeft - 0.015;
-  const bandRight = Math.min(0.92, seedLeft + Math.max(0.22, seed.width * 4));
+  // Keep the search band in the name column — not across Kvt/Pris/Beløp.
+  const bandRight = Math.min(0.56, seedLeft + Math.max(0.3, seed.width * 6));
   const maxGap = Math.max(seed.height, 0.012) * 2.2;
   const maxExtraLines = 2;
 
@@ -261,6 +246,7 @@ export function expandDescriptionPick(
     const t = item.str.trim();
     if (!t) return false;
     if (HEADER_LINE.test(t)) return false;
+    if (isOtherColumnToken(t)) return false;
     const left = item.x;
     const cx = item.x + item.width / 2;
     return left >= bandLeft - 0.02 && cx <= bandRight + 0.03;

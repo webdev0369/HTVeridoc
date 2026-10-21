@@ -181,7 +181,7 @@ export default function IntegrationGuidePage() {
                     <strong className="text-foreground">
                       PDF parsing and review
                     </strong>{' '}
-                    (purchase order confirmations / invoices). Your organization
+                    (purchase orders / invoices). Your organization
                     uploads documents; AI extracts data; people review; then you
                     approve.
                   </p>

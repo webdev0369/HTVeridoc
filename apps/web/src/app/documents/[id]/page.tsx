@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { AppShell } from '@/components/app-shell';
@@ -186,6 +186,8 @@ export default function DocumentDetailPage() {
     assignments: ColumnMapAssignment[];
   } | null>(null);
   const [pdfPage, setPdfPage] = useState(1);
+  /** Whether the active selection value was found on the PDF text layer. */
+  const [pdfValueLocated, setPdfValueLocated] = useState<boolean | null>(null);
   const [tableHeight, setTableHeight] = useState(280);
   const splitRef = useRef<HTMLDivElement>(null);
   const resizingSplit = useRef(false);
@@ -825,9 +827,14 @@ export default function DocumentDetailPage() {
   const handleSelect = (next: ReviewSelection) => {
     if (mapColumn) return; // ignore normal selection while mapping a column
     pdfPickSessionRef.current = { key: '', count: 0 };
+    setPdfValueLocated(null);
     setSelection(next);
     if (next?.page) setPdfPage(next.page);
   };
+
+  const handleHighlightLocated = useCallback((located: boolean) => {
+    setPdfValueLocated(located);
+  }, []);
 
   const handleStartMapColumn = (column: LineReviewColumn) => {
     setMapPreview(null);
@@ -1267,6 +1274,7 @@ export default function DocumentDetailPage() {
               editable={canEdit}
               selection={selection}
               onSelect={handleSelect}
+              pdfValueLocated={pdfValueLocated}
               saving={false}
               footer={reviewFooter}
               onSaveField={async (fieldId, currentValue) => {
@@ -1339,10 +1347,15 @@ export default function DocumentDetailPage() {
             onClearValue={() => {
               void handleClearValue();
             }}
+            onCloseSelection={() => {
+              setPdfValueLocated(null);
+              setSelection(null);
+            }}
             confirming={false}
             appendPickHint={
               selection?.type === 'line' && selection.column === 'description'
             }
+            onHighlightLocated={handleHighlightLocated}
             className="min-h-0 min-w-0 flex-1"
           />
 

@@ -20,6 +20,6 @@ Other projects receive the webhook and handle their own next steps.
 
 ## What this folder used to describe
 
-Earlier experiments mapped Live export to TotalCtrl store-orders / partner schedule. That path remains in code under `apps/api/src/integrations/export/` for reference only and is **not** triggered on Approve.
+Earlier experiments mapped Live export to TotalCtrl store-orders / partner schedule. That path remains in code under `packages/domains/src/integrations/export/` for reference only and is **not** triggered on Approve.
 
 Do not use Matching / store-orders / EXPORTED flow as the product requirement.

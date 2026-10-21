@@ -7,10 +7,9 @@ coverage
 .env.local
 *.log
 .DS_Store
-# PDF / file data at repo root (do not ignore apps/api/src/storage source)
+# PDF / file data at repo root
 /storage/
 *.tsbuildinfo
 .turbo
 .idea
 .vscode
-apps/api/uploads

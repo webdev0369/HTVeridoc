@@ -6,8 +6,8 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
-// Monolith + gateway + microservice slices (dev-micro)
-const PORTS = [3000, 3001, 3002, 3011, 3012, 3013, 3014, 3015];
+// web :3000, gateway :3001, API slices :3011–:3015
+const PORTS = [3000, 3001, 3011, 3012, 3013, 3014, 3015];
 
 function killPort(port) {
   if (process.platform === 'win32') {

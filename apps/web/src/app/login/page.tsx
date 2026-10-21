@@ -88,7 +88,7 @@ export default function LoginPage() {
           Sign in to HTVeriDoc
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Review purchase order confirmations with confidence.
+          Review purchase orders with confidence.
         </p>
       </div>
       <Card>

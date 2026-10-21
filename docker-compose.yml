@@ -31,17 +31,17 @@ services:
       timeout: 3s
       retries: 10
 
-  # Shared API image — each slice loads a different SERVICE_NAME
+  # One Nest app per microservice
   identity:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: apps/api/identity/Dockerfile
     restart: unless-stopped
     env_file:
       - .env
     environment:
       NODE_ENV: production
-      SERVICE_NAME: identity
+      APP_NAME: identity
       API_PORT: 3011
       RUN_MIGRATIONS: "true"
       DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
@@ -73,13 +73,13 @@ services:
   documents:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: apps/api/documents/Dockerfile
     restart: unless-stopped
     env_file:
       - .env
     environment:
       NODE_ENV: production
-      SERVICE_NAME: documents
+      APP_NAME: documents
       API_PORT: 3012
       DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
       REDIS_URL: redis://redis:6379
@@ -110,13 +110,13 @@ services:
   processing:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: apps/api/processing/Dockerfile
     restart: unless-stopped
     env_file:
       - .env
     environment:
       NODE_ENV: production
-      SERVICE_NAME: processing
+      APP_NAME: processing
       API_PORT: 3013
       DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
       REDIS_URL: redis://redis:6379
@@ -147,13 +147,13 @@ services:
   review:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: apps/api/review/Dockerfile
     restart: unless-stopped
     env_file:
       - .env
     environment:
       NODE_ENV: production
-      SERVICE_NAME: review
+      APP_NAME: review
       API_PORT: 3014
       DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
       REDIS_URL: redis://redis:6379
@@ -184,13 +184,13 @@ services:
   integrations:
     build:
       context: .
-      dockerfile: apps/api/Dockerfile
+      dockerfile: apps/api/integrations/Dockerfile
     restart: unless-stopped
     env_file:
       - .env
     environment:
       NODE_ENV: production
-      SERVICE_NAME: integrations
+      APP_NAME: integrations
       API_PORT: 3015
       DATABASE_URL: postgresql://${POSTGRES_USER:-htveridoc}:${POSTGRES_PASSWORD:-htveridoc}@postgres:5432/${POSTGRES_DB:-htveridoc}
       REDIS_URL: redis://redis:6379
@@ -221,7 +221,7 @@ services:
   gateway:
     build:
       context: .
-      dockerfile: apps/gateway/Dockerfile
+      dockerfile: apps/api/gateway/Dockerfile
     restart: unless-stopped
     environment:
       NODE_ENV: production

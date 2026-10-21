@@ -1,6 +1,5 @@
 /**
- * Local microservice mode: gateway (:3001) + 5 API slices + web.
- * Builds API once, then runs 5 node processes (avoids nest --watch fighting over dist/).
+ * Local microservice mode: gateway (:3001) + 5 API apps + web.
  *
  *   node scripts/dev-micro.js
  */
@@ -10,7 +9,6 @@ const os = require('os');
 const fs = require('fs');
 
 const ROOT = path.resolve(__dirname, '..');
-const API_DIR = path.join(ROOT, 'apps', 'api');
 const REQUIRED_MAJOR = 20;
 
 function nvmRoots() {
@@ -86,19 +84,48 @@ async function main() {
     console.warn('[dev-micro] free-dev-ports exited non-zero; continuing');
   }
 
-  console.log('[dev-micro] building @htveridoc/api…');
-  const build = spawnSync(pnpmCmd, ['--filter', '@htveridoc/api', 'build'], {
-    cwd: ROOT,
-    env: baseEnv,
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-  });
-  if ((build.status ?? 1) !== 0) {
-    console.error('[dev-micro] API build failed');
-    process.exit(build.status ?? 1);
+  console.log('[dev-micro] building shared packages + micro apps…');
+  const buildPkgs = spawnSync(
+    pnpmCmd,
+    [
+      '--filter',
+      '@htveridoc/shared',
+      '--filter',
+      '@htveridoc/db',
+      '--filter',
+      '@htveridoc/domains',
+      'build',
+    ],
+    {
+      cwd: ROOT,
+      env: baseEnv,
+      stdio: 'inherit',
+      shell: process.platform === 'win32',
+    },
+  );
+  if ((buildPkgs.status ?? 1) !== 0) {
+    console.error('[dev-micro] package build failed');
+    process.exit(buildPkgs.status ?? 1);
   }
 
-  const gatewayMods = path.join(ROOT, 'apps', 'gateway', 'node_modules');
+  for (const s of slices) {
+    const buildApp = spawnSync(
+      pnpmCmd,
+      ['--filter', `@htveridoc/${s.name}`, 'build'],
+      {
+        cwd: ROOT,
+        env: baseEnv,
+        stdio: 'inherit',
+        shell: process.platform === 'win32',
+      },
+    );
+    if ((buildApp.status ?? 1) !== 0) {
+      console.error(`[dev-micro] ${s.name} build failed`);
+      process.exit(buildApp.status ?? 1);
+    }
+  }
+
+  const gatewayMods = path.join(ROOT, 'apps', 'api', 'gateway', 'node_modules');
   if (!fs.existsSync(gatewayMods)) {
     console.log('[dev-micro] installing gateway deps…');
     const inst = spawnSync(
@@ -126,11 +153,11 @@ async function main() {
   }
 
   for (const s of slices) {
-    console.log(`[dev-micro] start api:${s.name} :${s.port}`);
+    console.log(`[dev-micro] start ${s.name} :${s.port}`);
     const child = spawn(node.exe, ['dist/main.js'], {
-      cwd: API_DIR,
+      cwd: path.join(ROOT, 'apps', 'api', s.name),
       env: envWithNode(node.binDir, {
-        SERVICE_NAME: s.name,
+        APP_NAME: s.name,
         API_PORT: String(s.port),
         PORT: String(s.port),
       }),

@@ -18,7 +18,6 @@ import {
 import {
   descriptionSeedOnArticleRow,
   expandDescriptionPick,
-  expandDescriptionPickForLine,
 } from '@/lib/description-pick';
 import type { BoundingBox } from '@/lib/types';
 
@@ -87,6 +86,8 @@ interface PdfViewerProps {
   onConfirmValue?: (value?: string) => void;
   /** Rossum-style: clear the selected field value */
   onClearValue?: () => void;
+  /** Dismiss the float without saving (reopen by clicking a field / line cell). */
+  onCloseSelection?: () => void;
   /** Map a whole PDF column onto a line-item field */
   columnMapMode?: boolean;
   columnMapHint?: string | null;
@@ -94,6 +95,11 @@ interface PdfViewerProps {
   confirming?: boolean;
   /** Description: expand multi-line product name on click. */
   appendPickHint?: boolean;
+  /**
+   * Fired when the active highlight is resolved against the PDF text layer.
+   * `located: false` means the value was not found on the page (do not scroll).
+   */
+  onHighlightLocated?: (located: boolean) => void;
   className?: string;
 }
 
@@ -791,6 +797,70 @@ function boxNearAnchorRow(
   return Math.abs(boxCenterY(box) - anchorY) <= band;
 }
 
+/**
+ * True when the highlight *value* appears in the PDF text layer.
+ * Ignores AI bounding-box fallbacks (those caused off-screen floats).
+ */
+function valueMatchedOnPage(
+  textItems: PdfTextItem[],
+  highlight: PdfHighlight,
+): boolean {
+  const rawValue = (highlight.value ?? '').trim();
+  if (!rawValue || textItems.length === 0) return false;
+
+  const dateParts = parseDateParts(rawValue);
+  if (dateParts) {
+    return (
+      findDateValueBoxes(textItems, dateParts, {
+        near: highlight.boundingBox,
+        anchorHints: highlight.anchorHints,
+      }).length > 0
+    );
+  }
+
+  const valueNum = parseHighlightNumber(rawValue);
+  const role = highlight.role ?? 'other';
+  const preferRight = role === 'quantity' || role === 'price';
+
+  if (valueNum != null && highlight.anchorHints?.length) {
+    if (
+      findNumericOnAnchorRow(
+        textItems,
+        valueNum,
+        highlight.anchorHints,
+        preferRight,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  if (isShortUnitToken(rawValue) && highlight.anchorHints?.length) {
+    if (findUnitOnAnchorRow(textItems, rawValue, highlight.anchorHints)) {
+      return true;
+    }
+  }
+
+  const fromText = findValueBoxes(textItems, highlight.value, {
+    near: highlight.boundingBox,
+    anchorHints: highlight.anchorHints,
+  });
+  if (fromText.length > 0) return true;
+
+  // After a user pick, the stored bbox is authoritative (footer notes, etc.).
+  if (role === 'text' && highlight.tone === 'edited' && highlight.boundingBox) {
+    return true;
+  }
+
+  // Description: product-name band on the article row counts as located,
+  // even when the stored value text differs slightly from the PDF.
+  if (role === 'text' && highlight.anchorHints?.length) {
+    return descriptionBandOnAnchorRow(textItems, highlight.anchorHints) != null;
+  }
+
+  return false;
+}
+
 /** Resolve highlight / popup anchor for a selection on a page. */
 function resolveHighlightBoxes(
   textItems: PdfTextItem[],
@@ -812,7 +882,13 @@ function resolveHighlightBoxes(
     if (dateBoxes.length > 0) return dateBoxes;
   }
 
-  // Description: keep the ring on this line's product name — never on Varenr.
+  // Description: after a user pick, keep the ring on what they clicked
+  // (including footer notes) — do not snap back to the product-name row.
+  if (isDescription && highlight.tone === 'edited' && highlight.boundingBox) {
+    return [highlight.boundingBox];
+  }
+
+  // Description (AI): keep the ring on this line's product name — never on Varenr.
   if (isDescription && highlight.anchorHints?.length) {
     const fromText = findValueBoxes(textItems, highlight.value, {
       near: highlight.boundingBox,
@@ -959,14 +1035,28 @@ export function PdfViewer({
   onValuePick,
   onConfirmValue,
   onClearValue,
+  onCloseSelection,
   columnMapMode = false,
   columnMapHint = null,
   onColumnMapSeedPick,
   confirming = false,
   appendPickHint = false,
+  onHighlightLocated,
   className = '',
 }: PdfViewerProps) {
   const textPickEnabled = pickMode || columnMapMode;
+
+  // Escape closes the float (same as X) without clearing the field value.
+  useEffect(() => {
+    if (!pickMode || !onCloseSelection) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      onCloseSelection();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pickMode, onCloseSelection]);
   const containerRef = useRef<HTMLDivElement>(null);
   const pageElRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
@@ -1222,27 +1312,38 @@ export function PdfViewer({
 
   // Scroll to highlight only when the selected *field* changes — not when the
   // user edits/confirms the value (that was jumping the view to the wrong place).
+  // Never scroll when the value is not on the PDF text layer.
   const lastScrollKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!highlight?.page || !pages.length) return;
     const target = pages.find((p) => p.page === highlight.page);
     if (!target?.height) return;
 
-    const scrollKey = `${highlight.label ?? ''}::${highlight.page}`;
+    const scrollKey = `${highlight.label ?? ''}::${highlight.page}::${(highlight.value ?? '').trim()}`;
     if (lastScrollKeyRef.current === scrollKey) return;
     // Wait until text layer is ready so we can locate the box once.
-    if (!target.textItems.length && !highlight.boundingBox) return;
+    if (!target.textItems.length) {
+      onHighlightLocated?.(false);
+      return;
+    }
     lastScrollKeyRef.current = scrollKey;
 
+    const located = valueMatchedOnPage(target.textItems, highlight);
+    onHighlightLocated?.(located);
+    if (!located) {
+      // Stay put — sidebar message / currency dropdown covers the edit path.
+      return;
+    }
+
     const boxes = resolveHighlightBoxes(target.textItems, highlight);
-    const box = boxes[0] ?? highlight.boundingBox;
+    const box = boxes[0];
     const pageEl = pageElRefs.current.get(highlight.page);
     const container = containerRef.current;
-    if (!pageEl || !container) return;
+    if (!pageEl || !container || !box) return;
 
     scrollLockRef.current = true;
     const pageOffset = pageEl.offsetTop - container.offsetTop;
-    const boxTop = box ? box.y * target.height : 0;
+    const boxTop = box.y * target.height;
     container.scrollTo({
       top: Math.max(0, pageOffset + boxTop - 80),
       behavior: 'smooth',
@@ -1260,28 +1361,39 @@ export function PdfViewer({
     highlight?.anchorHints,
     pages,
     setPage,
+    onHighlightLocated,
   ]);
 
   // Reset scroll memory when highlight clears so the next field selection scrolls again.
   useEffect(() => {
-    if (!highlight) lastScrollKeyRef.current = null;
-  }, [highlight]);
+    if (!highlight) {
+      lastScrollKeyRef.current = null;
+      onHighlightLocated?.(false);
+    }
+  }, [highlight, onHighlightLocated]);
 
   const activePageView = useMemo(
     () => pages.find((p) => p.page === (highlight?.page ?? page)) ?? null,
     [pages, highlight?.page, page],
   );
 
+  const valueLocated = useMemo(() => {
+    if (!highlight || !activePageView?.textItems.length) return false;
+    if (highlight.page !== activePageView.page) return false;
+    return valueMatchedOnPage(activePageView.textItems, highlight);
+  }, [highlight, activePageView]);
+
   const matchedBoxes = useMemo(() => {
-    if (!highlight || !activePageView) return [] as BoundingBox[];
+    if (!highlight || !activePageView || !valueLocated) return [] as BoundingBox[];
     if (highlight.page !== activePageView.page) return [];
     return resolveHighlightBoxes(activePageView.textItems, highlight);
-  }, [highlight, activePageView]);
+  }, [highlight, activePageView, valueLocated]);
 
   const primaryBox = matchedBoxes[0] ?? null;
   const showActive =
     Boolean(highlight) &&
     Boolean(activePageView) &&
+    valueLocated &&
     highlight!.page === activePageView!.page &&
     activePageView!.width > 0;
 
@@ -1335,10 +1447,19 @@ export function PdfViewer({
               'Map column: click any value in the PDF column to fill all rows'}
           </span>
         )}
-        {!columnMapMode && pickMode && (
+        {!columnMapMode && pickMode && valueLocated && (
           <span className="rounded bg-[#3b82f6]/20 px-2 py-0.5 text-[11px] font-medium text-[#93c5fd]">
             Type the correct value, or click it on the PDF — “
             {highlight?.label ?? 'field'}”
+          </span>
+        )}
+        {!columnMapMode && pickMode && !valueLocated && highlight && (
+          <span className="rounded bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-200/90">
+            “{highlight.label ?? 'Field'}” not found on this page — edit in the
+            sidebar
+            {highlight.label?.toLowerCase() === 'currency'
+              ? ' or choose a currency'
+              : ''}
           </span>
         )}
         {rendering && (
@@ -1438,12 +1559,12 @@ export function PdfViewer({
                         }
                         if (!onValuePick) return;
                         if (appendPickHint) {
-                          // Lock to this line's article row so a click on the
-                          // product above/below cannot steal the wrong name.
-                          const expanded = expandDescriptionPickForLine(
+                          // Trust the click: expand the name/note at that spot.
+                          // Do not retarget to the line's article row (that blocked
+                          // footer / off-row corrections).
+                          const expanded = expandDescriptionPick(
                             seed,
                             pageView.textItems,
-                            highlight?.anchorHints,
                           );
                           onValuePick(expanded.text, expanded.box, {
                             append: e.shiftKey,
@@ -1489,6 +1610,7 @@ export function PdfViewer({
                     appendPickHint={appendPickHint}
                     onConfirmValue={onConfirmValue}
                     onClearValue={onClearValue}
+                    onCloseSelection={onCloseSelection}
                   />
                 )}
 
@@ -1529,6 +1651,7 @@ function HighlightPopup({
   appendPickHint,
   onConfirmValue,
   onClearValue,
+  onCloseSelection,
 }: {
   highlight: PdfHighlight;
   primaryBox: BoundingBox | null;
@@ -1537,6 +1660,7 @@ function HighlightPopup({
   appendPickHint?: boolean;
   onConfirmValue?: (value?: string) => void;
   onClearValue?: () => void;
+  onCloseSelection?: () => void;
 }) {
   const [draft, setDraft] = useState(highlight.value ?? '');
 
@@ -1569,6 +1693,12 @@ function HighlightPopup({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === 'Escape' && onCloseSelection) {
+                e.preventDefault();
+                e.stopPropagation();
+                onCloseSelection();
+                return;
+              }
               if (e.key === 'Enter' && canSave) {
                 e.preventDefault();
                 onConfirmValue?.(draft.trim());
@@ -1590,7 +1720,7 @@ function HighlightPopup({
       </p>
       <p className="pointer-events-none mt-1 px-0.5 text-[11px] text-slate-500">
         {appendPickHint
-          ? 'Click the correct product name on the PDF (replaces). Shift+click to add more, then ✓'
+          ? 'Click text on the PDF to set this description (replaces). Shift+click to add more, then ✓'
           : 'Type the correct value, or click it on the PDF, then press ✓'}
       </p>
       {!anchorBox && (
@@ -1599,43 +1729,78 @@ function HighlightPopup({
         </p>
       )}
       <div
-        className="pointer-events-auto mt-2 flex items-center justify-end gap-2 border-t border-white/10 pt-2"
+        className="pointer-events-auto mt-2 flex items-center gap-2 border-t border-white/10 pt-2"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <button
           type="button"
-          title="Clear value"
-          disabled={!pickMode || confirming}
+          title="Close editor (Esc)"
+          disabled={!onCloseSelection || confirming}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            onClearValue?.();
+            onCloseSelection?.();
           }}
           className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
         >
-          <TrashIcon />
+          <CloseIcon />
         </button>
-        <button
-          type="button"
-          title="Save and go to next"
-          disabled={!canSave}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onConfirmValue?.(draft.trim());
-          }}
-          className={`inline-flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-40 ${
-            highlight.tone === 'edited'
-              ? 'bg-emerald-500 text-white ring-2 ring-emerald-300/50'
-              : 'bg-emerald-500 text-white hover:bg-emerald-400'
-          }`}
-        >
-          <CheckIcon />
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            title="Clear value"
+            disabled={!pickMode || confirming}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onClearValue?.();
+            }}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
+          >
+            <TrashIcon />
+          </button>
+          <button
+            type="button"
+            title="Save and go to next"
+            disabled={!canSave}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onConfirmValue?.(draft.trim());
+            }}
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-40 ${
+              highlight.tone === 'edited'
+                ? 'bg-emerald-500 text-white ring-2 ring-emerald-300/50'
+                : 'bg-emerald-500 text-white hover:bg-emerald-400'
+            }`}
+          >
+            <CheckIcon />
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M18 6L6 18" />
+      <path d="M6 6l12 12" />
+    </svg>
   );
 }
 

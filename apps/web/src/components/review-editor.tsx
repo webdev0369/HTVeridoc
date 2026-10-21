@@ -12,6 +12,7 @@ import {
   dateFieldAnchorHints,
   type ReviewSelection,
 } from '@/lib/review-types';
+import { orderedCurrencyOptions } from '@/lib/currency-options';
 import type { HighlightTone } from '@/components/pdf-viewer';
 import {
   ProcessingLog,
@@ -60,6 +61,8 @@ interface ReviewEditorProps {
   ) => void | Promise<void>;
   saving?: boolean;
   footer?: React.ReactNode;
+  /** Whether the selected field value was found on the PDF text layer. */
+  pdfValueLocated?: boolean | null;
 }
 
 export function ReviewEditor({
@@ -73,6 +76,7 @@ export function ReviewEditor({
   onSaveField,
   saving,
   footer,
+  pdfValueLocated = null,
 }: ReviewEditorProps) {
   const fields = extraction.fields ?? [];
   const [showLog, setShowLog] = useState(false);
@@ -197,6 +201,12 @@ export function ReviewEditor({
                     }
                     issue={issueByField.get(field.fieldKey)}
                     disabled={saving}
+                    pdfValueLocated={
+                      selection?.type === 'field' && selection.id === field.id
+                        ? pdfValueLocated
+                        : null
+                    }
+                    languageHints={fields.map((f) => f.currentValue)}
                     onSelect={() => selectField(field)}
                     onSave={async (value) => {
                       await onSaveField(field.id, value);
@@ -362,6 +372,8 @@ function FieldRow({
   selected,
   issue,
   disabled,
+  pdfValueLocated,
+  languageHints,
   onSelect,
   onSave,
 }: {
@@ -371,27 +383,49 @@ function FieldRow({
   selected: boolean;
   issue?: ValidationErrorDto;
   disabled?: boolean;
+  pdfValueLocated?: boolean | null;
+  languageHints?: Array<string | null | undefined>;
   onSelect: () => void;
   onSave: (value: string | null) => Promise<void>;
 }) {
   const [value, setValue] = useState(field.currentValue ?? '');
   const [dirty, setDirty] = useState(false);
+  const isCurrency = field.fieldKey === 'currency';
+  const currencyOptions = useMemo(
+    () =>
+      isCurrency
+        ? orderedCurrencyOptions(languageHints ?? [], value || field.currentValue)
+        : [],
+    [isCurrency, languageHints, value, field.currentValue],
+  );
 
   useEffect(() => {
     setValue(field.currentValue ?? '');
     setDirty(false);
   }, [field.currentValue, field.id]);
 
-  const commit = async () => {
-    if (!editable || !dirty) return;
-    const next = value.trim() === '' ? null : value;
-    if (next === (field.currentValue ?? null)) {
+  const commit = async (nextRaw?: string) => {
+    if (!editable) return;
+    const raw = nextRaw !== undefined ? nextRaw : value;
+    const next = raw.trim() === '' ? null : raw.trim().toUpperCase();
+    const current = field.currentValue ?? null;
+    const normalizedCurrent =
+      isCurrency && current ? current.trim().toUpperCase() : current;
+    if (next === normalizedCurrent) {
       setDirty(false);
+      setValue(next ?? '');
       return;
     }
+    if (nextRaw === undefined && !dirty) return;
     await onSave(next);
+    setValue(next ?? '');
     setDirty(false);
   };
+
+  const notOnDocument =
+    selected &&
+    pdfValueLocated === false &&
+    Boolean((value || field.currentValue || '').trim());
 
   return (
     <div
@@ -422,21 +456,69 @@ function FieldRow({
       </div>
       <div onClick={(e) => e.stopPropagation()}>
         {editable ? (
-          <input
-            value={value}
-            disabled={disabled}
-            onFocus={onSelect}
-            onChange={(e) => {
-              setValue(e.target.value);
-              setDirty(true);
-            }}
-            onBlur={() => void commit()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur();
-            }}
-            className="w-full border-0 bg-transparent px-0 py-0.5 text-[15px] font-medium text-white outline-none placeholder:text-slate-600"
-            placeholder="—"
-          />
+          isCurrency ? (
+            <div className="flex items-center gap-2">
+              <input
+                value={value}
+                disabled={disabled}
+                onFocus={onSelect}
+                onChange={(e) => {
+                  setValue(e.target.value.toUpperCase());
+                  setDirty(true);
+                }}
+                onBlur={() => void commit()}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                }}
+                className="min-w-0 flex-1 border-0 bg-transparent px-0 py-0.5 text-[15px] font-medium uppercase tracking-wide text-white outline-none placeholder:text-slate-600"
+                placeholder="—"
+                aria-label="Currency code"
+              />
+              <select
+                value={
+                  currencyOptions.some(
+                    (o) => o.code === value.trim().toUpperCase(),
+                  )
+                    ? value.trim().toUpperCase()
+                    : ''
+                }
+                disabled={disabled}
+                onFocus={onSelect}
+                onChange={(e) => {
+                  const code = e.target.value;
+                  if (!code) return;
+                  setValue(code);
+                  setDirty(true);
+                  void commit(code);
+                }}
+                className="max-w-[148px] shrink-0 rounded-md border border-white/10 bg-[#0f1419] px-2 py-1 text-[12px] text-slate-200 outline-none focus:border-[#3b82f6]/60"
+                aria-label="Select currency"
+              >
+                <option value="">Select…</option>
+                {currencyOptions.map((o) => (
+                  <option key={o.code} value={o.code}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : (
+            <input
+              value={value}
+              disabled={disabled}
+              onFocus={onSelect}
+              onChange={(e) => {
+                setValue(e.target.value);
+                setDirty(true);
+              }}
+              onBlur={() => void commit()}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur();
+              }}
+              className="w-full border-0 bg-transparent px-0 py-0.5 text-[15px] font-medium text-white outline-none placeholder:text-slate-600"
+              placeholder="—"
+            />
+          )
         ) : (
           <p className="text-[15px] font-medium text-white">
             {field.currentValue ?? (
@@ -445,6 +527,13 @@ function FieldRow({
           </p>
         )}
       </div>
+      {notOnDocument && (
+        <p className="mt-1.5 text-[11px] leading-snug text-slate-500">
+          {isCurrency
+            ? 'Not found on the document. Confirm the code or choose from the list.'
+            : 'Not found on the document. Enter the value here or click it on the PDF if it appears elsewhere.'}
+        </p>
+      )}
       {field.isUserEdited &&
         (field.originalValue ?? '') !== (field.currentValue ?? '') && (
           <p className="mt-1 text-[11px] text-slate-500">

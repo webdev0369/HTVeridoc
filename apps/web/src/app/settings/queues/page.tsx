@@ -340,7 +340,7 @@ export default function QueueManagerSettingsPage() {
                 onChange={(e) =>
                   setForm((p) => ({ ...p, name: e.target.value }))
                 }
-                placeholder="e.g. Purchase order confirmations"
+                placeholder="e.g. Purchase orders"
               />
             </div>
             <div className="space-y-2">

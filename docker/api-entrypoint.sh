@@ -6,13 +6,23 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 1
 fi
 
-SERVICE_NAME="${SERVICE_NAME:-all}"
-echo "[api] SERVICE_NAME=${SERVICE_NAME}"
+APP_NAME="${APP_NAME:-unknown}"
+echo "[api] APP_NAME=${APP_NAME}"
 
-# Run migrations once (identity slice, or explicitly requested).
-if [ "${RUN_MIGRATIONS:-}" = "true" ] || [ "${SERVICE_NAME}" = "identity" ]; then
+# Run migrations once (identity service, or explicitly requested).
+if [ "${RUN_MIGRATIONS:-}" = "true" ] || [ "${APP_NAME}" = "identity" ]; then
   echo "[api] Running database migrations..."
-  if ! node ./node_modules/typeorm/cli.js migration:run -d dist/database/data-source.js; then
+  DS=""
+  if [ -f ./node_modules/@htveridoc/db/dist/database/data-source.js ]; then
+    DS=./node_modules/@htveridoc/db/dist/database/data-source.js
+  elif [ -f ./dist/database/data-source.js ]; then
+    DS=./dist/database/data-source.js
+  fi
+  if [ -z "$DS" ]; then
+    echo "[api] ERROR: cannot find TypeORM data-source.js"
+    exit 1
+  fi
+  if ! node ./node_modules/typeorm/cli.js migration:run -d "$DS"; then
     echo "[api] ERROR: migrations failed. Check DATABASE_URL and that Postgres is reachable from this service."
     exit 1
   fi
