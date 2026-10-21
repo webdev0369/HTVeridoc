@@ -111,6 +111,9 @@ const existing = env[pathKey] || env.PATH || '';
 env[pathKey] = `${binDir}${path.delimiter}${existing}`;
 env.PATH = env[pathKey];
 
+// Keep root .env aligned with branch (monolith vs micro) for migrations/seed/etc.
+require('./sync-env').syncEnv();
+
 const [cmd, ...cmdArgs] = args;
 const nodeExe = path.join(
   binDir,

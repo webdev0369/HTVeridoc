@@ -13,10 +13,13 @@ export interface CatalogField {
   defaultMode: FieldMode;
 }
 
-/** Document types exposed in Settings (UNKNOWN excluded). */
+/**
+ * Document types exposed in Settings (UNKNOWN excluded).
+ * `PURCHASE_ORDER` remains in the enum / CATALOG for DB/API compatibility
+ * but is not listed here — use `PURCHASE_ORDER_CONFIRMATION` (label: Purchase order).
+ */
 export const CONFIGURABLE_DOCUMENT_TYPES = [
   DocumentType.PURCHASE_ORDER_CONFIRMATION,
-  DocumentType.PURCHASE_ORDER,
   DocumentType.INVOICE,
   DocumentType.CREDIT_NOTE,
   DocumentType.DELIVERY_NOTE,
@@ -26,8 +29,7 @@ export type ConfigurableDocumentType =
   (typeof CONFIGURABLE_DOCUMENT_TYPES)[number];
 
 export const DOCUMENT_TYPE_LABELS: Record<ConfigurableDocumentType, string> = {
-  [DocumentType.PURCHASE_ORDER_CONFIRMATION]: 'Purchase order confirmation',
-  [DocumentType.PURCHASE_ORDER]: 'Purchase order',
+  [DocumentType.PURCHASE_ORDER_CONFIRMATION]: 'Purchase order',
   [DocumentType.INVOICE]: 'Invoice',
   [DocumentType.CREDIT_NOTE]: 'Credit note',
   [DocumentType.DELIVERY_NOTE]: 'Delivery note',

@@ -231,10 +231,10 @@ export function LineItemsTable({
   }, [confirmSignal, markColumnsConfirmed]);
 
   const saveLineAndMark = useCallback(
-    (lineItemId: string, patch: Partial<ExtractionLineItemDto>) => {
+    async (lineItemId: string, patch: Partial<ExtractionLineItemDto>) => {
       // Mark ✓ immediately — parent save is optimistic / fire-and-forget.
       markColumnsConfirmed(lineItemId, columnsFromPatch(patch));
-      void onSaveLine(lineItemId, patch);
+      await onSaveLine(lineItemId, patch);
     },
     [onSaveLine, markColumnsConfirmed],
   );
@@ -511,35 +511,26 @@ export function LineItemsTable({
             </tr>
           </thead>
           <tbody>
-            {lineItems.map((line) => {
-              const rowSelected =
-                selection?.type === 'line' && selection.id === line.id;
-              return (
+            {lineItems.map((line) => (
               <LineRow
                 key={line.id}
                 line={line}
                 editable={editable}
-                selected={rowSelected}
-                selectedColumn={rowSelected ? selection.column : null}
-                selectionValue={rowSelected ? selection.value : null}
-                selectionPickAt={rowSelected ? selection.pickAt : undefined}
+                selected={
+                  selection?.type === 'line' && selection.id === line.id
+                }
+                selectedColumn={
+                  selection?.type === 'line' && selection.id === line.id
+                    ? selection.column
+                    : null
+                }
                 confirmedCells={confirmedCells}
                 showBaseCols={showBaseCols}
                 showBaseContentCol={showBaseContentCol}
                 showStPerBaseCol={showStPerBaseCol}
                 issue={issueByLine.get(line.id)}
                 disabled={saving}
-                onSelectColumn={(column) => {
-                  // Same cell already active (e.g. input focus after a PDF pick):
-                  // do NOT rebuild selection from line props — that wiped the
-                  // picked value/box so re-applying the extraction name failed.
-                  if (
-                    selection?.type === 'line' &&
-                    selection.id === line.id &&
-                    selection.column === column
-                  ) {
-                    return;
-                  }
+                onSelectColumn={(column) =>
                   onSelect({
                     type: 'line',
                     id: line.id,
@@ -556,11 +547,9 @@ export function LineItemsTable({
                           )
                         ? 'edited'
                         : 'ai',
-                  });
-                }}
-                onSave={async (patch) => {
-                  saveLineAndMark(line.id, patch);
-                }}
+                  })
+                }
+                onSave={(patch) => saveLineAndMark(line.id, patch)}
                 onDelete={
                   showActions
                     ? () =>
@@ -575,8 +564,7 @@ export function LineItemsTable({
                     : undefined
                 }
               />
-              );
-            })}
+            ))}
             {!lineItems.length && (
               <tr>
                 <td
@@ -675,8 +663,6 @@ function LineRow({
   editable,
   selected,
   selectedColumn,
-  selectionValue,
-  selectionPickAt,
   confirmedCells,
   showBaseCols,
   showBaseContentCol,
@@ -691,10 +677,6 @@ function LineRow({
   editable: boolean;
   selected: boolean;
   selectedColumn: LineReviewColumn | null;
-  /** Live value from PDF popup selection (beats stale local draft). */
-  selectionValue?: string | null;
-  /** Changes on every PDF pick — forces sync even when text is unchanged. */
-  selectionPickAt?: number;
   confirmedCells: Set<string>;
   showBaseCols: boolean;
   showBaseContentCol: boolean;
@@ -789,80 +771,13 @@ function LineRow({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- syncKey captures field values
   }, [syncKey]);
 
-  // PDF popup picks update selection.value immediately — mirror into the
-  // active cell so local draft cannot keep the previous name. selectionPickAt
-  // ensures re-picking the same extraction text still refreshes the cell.
-  useEffect(() => {
-    if (!selectedColumn || selectionValue == null) return;
-    const text = selectionValue;
-    setDirty(false);
-    switch (selectedColumn) {
-      case 'description':
-        setDescription(text);
-        break;
-      case 'articleNumber':
-        setArticleNumber(text);
-        break;
-      case 'purchaseUnit':
-        setPurchaseUnit(text);
-        break;
-      case 'stocktakingUnit':
-        setStocktakingUnit(text);
-        break;
-      case 'baseMeasurementUnit':
-        setBaseUnit(text);
-        break;
-      case 'purchaseQuantity':
-        setPurchaseQty(text);
-        break;
-      case 'unitPrice':
-        setPurchasePrice(text);
-        break;
-      case 'stockTakingQuantity':
-        setStocktakingQty(text);
-        break;
-      case 'stocktakingUnitPrice':
-        setStocktakingPrice(text);
-        break;
-      case 'stockTakingQuantityPerPurchaseUnit':
-        setStPerPu(text);
-        break;
-      case 'baseContentQuantity':
-        setBaseContent(text);
-        break;
-      case 'pricePerBaseUnit':
-        setPricePerBase(text);
-        break;
-      case 'stockTakingQuantityPerBaseMeasurementUnit':
-        setStPerBase(text);
-        break;
-      case 'discount':
-        setDiscount(text);
-        break;
-      case 'vat':
-        setVat(text);
-        break;
-      case 'amount':
-        setAmount(text);
-        break;
-      default:
-        break;
-    }
-  }, [selectedColumn, selectionValue, selectionPickAt]);
-
   const commit = async () => {
     if (!editable || !dirty) return;
 
     // Only send fields that actually changed vs server — never wipe siblings.
-    // Prefer parent line.* when PDF already wrote a newer value (blur race).
     const patch: Partial<ExtractionLineItemDto> = {};
     const nextArticle = articleNumber.trim() || null;
-    const nextDesc =
-      selectedColumn === 'description' &&
-      selectionValue != null &&
-      selectionValue.trim() !== description.trim()
-        ? selectionValue.trim() || null
-        : description.trim() || null;
+    const nextDesc = description.trim() || null;
     const nextPurchaseUnit = purchaseUnit.trim() || null;
     const nextStockUnit = stocktakingUnit.trim() || null;
     const nextBaseUnit = baseUnit.trim() || null;
@@ -954,11 +869,7 @@ function LineRow({
       <input
         value={value}
         disabled={disabled}
-        onFocus={() => {
-          // Avoid re-selecting the active cell — resets PDF pick state.
-          if (selectedColumn === column) return;
-          onSelectColumn(column);
-        }}
+        onFocus={() => onSelectColumn(column)}
         onChange={(e) => {
           set(e.target.value);
           setDirty(true);
@@ -969,7 +880,11 @@ function LineRow({
         }}
         className={`w-full min-w-0 truncate border-0 bg-transparent py-0.5 text-sm text-white outline-none placeholder:text-slate-600 focus:text-white ${
           align === 'right' ? 'text-right' : 'text-left'
-        } ${active ? 'rounded bg-[#3b82f6]/20 px-1' : ''}`}
+        } ${
+          active
+            ? 'rounded bg-[#3b82f6]/35 px-1 ring-1 ring-[#3b82f6]/70'
+            : ''
+        }`}
       />
     ) : (
       <span
@@ -980,8 +895,9 @@ function LineRow({
     );
   };
 
+  // Soft row tint only — the active *cell* carries the strong highlight.
   const rowBg = selected
-    ? 'bg-[#1a4d8c]/45'
+    ? 'bg-[#1a4d8c]/15'
     : issue
       ? 'bg-rose-950/40'
       : line.lineType === 'CANCELLED'
@@ -995,7 +911,7 @@ function LineRow({
         ? 'hover:bg-rose-950/30'
         : 'hover:bg-white/[0.03]';
   const actionBg = selected
-    ? 'bg-[#163a66]'
+    ? 'bg-[#121826]'
     : issue
       ? 'bg-[#2a1218]'
       : line.lineType === 'CANCELLED'
@@ -1003,12 +919,11 @@ function LineRow({
         : 'bg-[#0f1419]';
 
   return (
-    <tr
-      onClick={() => onSelectColumn('description')}
-      title={issue?.message}
-      className={`cursor-pointer transition ${rowBg} ${rowHover}`}
-    >
-      <td className="overflow-hidden border-b border-white/5 px-3 py-2.5 text-xs text-slate-500">
+    <tr title={issue?.message} className={`transition ${rowBg} ${rowHover}`}>
+      <td
+        className="overflow-hidden border-b border-white/5 px-3 py-2.5 text-xs text-slate-500"
+        onClick={() => onSelectColumn('description')}
+      >
         {line.position ?? '—'}
       </td>
       <td

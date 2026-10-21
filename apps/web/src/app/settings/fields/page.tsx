@@ -419,9 +419,8 @@ export default function FieldSettingsPage() {
                 <>
                   {configQuery.data?.requiresLineItems ? (
                     <p className="text-sm text-muted-foreground">
-                      Line items remain required for purchase order
-                      confirmations. Configure column visibility and features
-                      below.
+                      Line items remain required for purchase orders. Configure
+                      column visibility and features below.
                     </p>
                   ) : null}
                   <LineItemColumnSettings

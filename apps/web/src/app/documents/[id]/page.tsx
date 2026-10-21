@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import { AppShell } from '@/components/app-shell';
@@ -44,7 +44,6 @@ import {
   columnMapParseMode,
   type ColumnMapAssignment,
 } from '@/lib/column-map';
-import { looksLikeTableHeaderNoise } from '@/lib/description-pick';
 import { isDateFieldKey, normalizeDateInput } from '@/lib/date-format';
 import {
   buildReviewQueue,
@@ -187,6 +186,8 @@ export default function DocumentDetailPage() {
     assignments: ColumnMapAssignment[];
   } | null>(null);
   const [pdfPage, setPdfPage] = useState(1);
+  /** Whether the active selection value was found on the PDF text layer. */
+  const [pdfValueLocated, setPdfValueLocated] = useState<boolean | null>(null);
   const [tableHeight, setTableHeight] = useState(280);
   const splitRef = useRef<HTMLDivElement>(null);
   const resizingSplit = useRef(false);
@@ -204,9 +205,6 @@ export default function DocumentDetailPage() {
     key: '',
     count: 0,
   });
-  /** Always-current selection for PDF picks (avoids stale closures). */
-  const selectionRef = useRef<ReviewSelection>(null);
-  selectionRef.current = selection;
   const [dirtyTick, setDirtyTick] = useState(0);
   const [savingDraft, setSavingDraft] = useState(false);
   const [reloadPromptOpen, setReloadPromptOpen] = useState(false);
@@ -520,12 +518,21 @@ export default function DocumentDetailPage() {
 
   const revalidateMutation = useMutation({
     mutationFn: async () => {
+      // Flush first so validate / refetch keep the user's approved picks.
       await flushPendingEdits();
       return apiFetch<ValidationDto>(`/documents/${id}/validate`, {
         method: 'POST',
       });
     },
-    onSuccess: invalidateDoc,
+    onSuccess: (validation) => {
+      queryClient.setQueryData(['validation', id], validation);
+      // Refresh status/events only — keep optimistic extraction (user edits)
+      // until a later refetch; extraction is already saved by flush.
+      queryClient.invalidateQueries({ queryKey: ['documents', id] });
+      queryClient.invalidateQueries({ queryKey: ['validation', id] });
+      queryClient.invalidateQueries({ queryKey: ['events', id] });
+      queryClient.invalidateQueries({ queryKey: ['documents'] });
+    },
   });
 
   // If extraction finished but validation never advanced the status, show data
@@ -823,16 +830,20 @@ export default function DocumentDetailPage() {
         selection.type === 'line'
           ? highlightRoleForColumn(selection.column)
           : undefined,
-      // pickAt is only on selection — include via deps so boxes refresh
     };
-  }, [selection, pdfPage, selection?.pickAt]);
+  }, [selection, pdfPage]);
 
   const handleSelect = (next: ReviewSelection) => {
     if (mapColumn) return; // ignore normal selection while mapping a column
     pdfPickSessionRef.current = { key: '', count: 0 };
+    setPdfValueLocated(null);
     setSelection(next);
     if (next?.page) setPdfPage(next.page);
   };
+
+  const handleHighlightLocated = useCallback((located: boolean) => {
+    setPdfValueLocated(located);
+  }, []);
 
   const handleStartMapColumn = (column: LineReviewColumn) => {
     setMapPreview(null);
@@ -917,43 +928,31 @@ export default function DocumentDetailPage() {
     box?: { x: number; y: number; width: number; height: number },
     opts?: { append?: boolean },
   ) => {
-    const active = selectionRef.current;
-    if (!active || !canEdit || !value.trim()) return;
+    if (!selection || !canEdit || !value.trim()) return;
     const picked = value.trim();
 
-    if (active.type === 'field') {
-      const currentValue = normalizeFieldValue(active, picked);
-      queueFieldEdit(active.id, currentValue);
+    if (selection.type === 'field') {
+      const currentValue = normalizeFieldValue(selection, picked);
+      queueFieldEdit(selection.id, currentValue);
       setSelection({
-        ...active,
+        ...selection,
         value: currentValue,
         tone: 'edited',
         page: pdfPage,
-        boundingBox: box ? { ...box } : active.boundingBox,
-        pickAt: Date.now(),
+        boundingBox: box ?? selection.boundingBox,
       });
       return;
     }
 
-    if (active.type === 'line') {
-      // Description: never accept PDF table headers as a product name
-      // (e.g. "Antall Enhet Sum mva. inkl").
-      if (
-        active.column === 'description' &&
-        looksLikeTableHeaderNoise(picked)
-      ) {
-        return;
-      }
+    if (selection.type === 'line') {
       // Description: each click replaces with text at that click.
       // Shift+click appends (for rare extra fragments).
       const appendDescription =
-        active.column === 'description' && Boolean(opts?.append);
+        selection.column === 'description' && Boolean(opts?.append);
       let nextText = picked;
       if (appendDescription) {
-        const prev = active.value?.trim() ?? '';
+        const prev = selection.value?.trim() ?? '';
         if (prev) {
-          // Same fragment again while appending — keep prev, but still refresh
-          // the pick box below so the ring updates.
           if (prev === picked || prev.includes(picked)) {
             nextText = prev;
           } else if (picked.includes(prev)) {
@@ -964,30 +963,28 @@ export default function DocumentDetailPage() {
         }
       }
 
-      // Always prefer the new click box so re-picking the *same* extraction
-      // name after an edit still moves/updates the green ring.
       const nextBox =
         appendDescription && box
-          ? mergePickBoxes(active.boundingBox, box)
-          : (box ?? active.boundingBox);
+          ? mergePickBoxes(selection.boundingBox, box)
+          : (box ?? selection.boundingBox);
 
-      const patch = lineColumnToPatch(active.column, nextText);
-      queueLineEdit(active.id, patch);
-      const pickedAt = Date.now();
-      setLineConfirmSignal({
-        lineId: active.id,
-        column: active.column,
-        at: pickedAt,
-      });
-      // Always a new selection object + pickAt so re-clicking the *same*
-      // extraction name still refreshes the ring and LineRow draft.
+      // Always apply to the *currently selected* line (e.g. Line 9 Description
+      // stays Line 9 even if the PDF click is on Line 2's product name).
+      const patch = lineColumnToPatch(selection.column, nextText);
+      queueLineEdit(selection.id, patch);
+      if (selection.column !== 'description') {
+        setLineConfirmSignal({
+          lineId: selection.id,
+          column: selection.column,
+          at: Date.now(),
+        });
+      }
       setSelection({
-        ...active,
+        ...selection,
         value: nextText,
         tone: 'edited',
         page: pdfPage,
-        boundingBox: nextBox ? { ...nextBox } : active.boundingBox,
-        pickAt: pickedAt,
+        boundingBox: nextBox,
       });
     }
   };
@@ -1288,6 +1285,7 @@ export default function DocumentDetailPage() {
               editable={canEdit}
               selection={selection}
               onSelect={handleSelect}
+              pdfValueLocated={pdfValueLocated}
               saving={false}
               footer={reviewFooter}
               onSaveField={async (fieldId, currentValue) => {
@@ -1360,10 +1358,15 @@ export default function DocumentDetailPage() {
             onClearValue={() => {
               void handleClearValue();
             }}
+            onCloseSelection={() => {
+              setPdfValueLocated(null);
+              setSelection(null);
+            }}
             confirming={false}
             appendPickHint={
               selection?.type === 'line' && selection.column === 'description'
             }
+            onHighlightLocated={handleHighlightLocated}
             className="min-h-0 min-w-0 flex-1"
           />
 

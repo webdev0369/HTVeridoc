@@ -110,16 +110,24 @@ export class HandoffDispatchService {
         .digest('hex');
     }
 
-    const res = await fetch(endpoint.url, {
-      method: 'POST',
-      headers,
-      body: raw,
-      signal: AbortSignal.timeout(15_000),
-    });
+    let res: Response;
+    try {
+      res = await fetch(endpoint.url, {
+        method: 'POST',
+        headers,
+        body: raw,
+        signal: AbortSignal.timeout(15_000),
+      });
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : 'unknown';
+      throw new Error(`fetch failed → ${endpoint.url} (${reason})`);
+    }
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status} ${text.slice(0, 160)}`);
+      throw new Error(
+        `HTTP ${res.status} → ${endpoint.url} ${text.slice(0, 160)}`,
+      );
     }
 
     this.logger.debug(

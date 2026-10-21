@@ -85,7 +85,7 @@ export default function DashboardPage() {
       <div className="space-y-8">
         <PageHeader
           title="Dashboard"
-          description={`Welcome back${user ? `, ${user.name}` : ''}. Track PO confirmations and jump into review.`}
+          description={`Welcome back${user ? `, ${user.name}` : ''}. Track purchase orders and jump into review.`}
           actions={
             <Button asChild>
               <Link href="/documents">
@@ -151,7 +151,7 @@ export default function DashboardPage() {
               ) : recent.length === 0 ? (
                 <EmptyState
                   title="No documents yet"
-                  description="Upload a purchase order confirmation PDF to start extraction and review."
+                  description="Upload a purchase order PDF to start extraction and review."
                   action={
                     <Button asChild>
                       <Link href="/documents">Go to Documents</Link>

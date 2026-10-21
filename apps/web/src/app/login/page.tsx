@@ -46,7 +46,7 @@ function loginErrorMessage(err: unknown): string {
     );
   }
   if (err.status === 400) {
-    return err.message || 'Check the highlighted fields and try again.';
+    return err.message || 'Invalid details. Please check and try again.';
   }
   if (err.status >= 500) {
     return 'Sign in is temporarily unavailable. Please try again in a moment.';
@@ -61,7 +61,7 @@ export default function LoginPage() {
   const {
     register,
     handleSubmit,
-    formState: { isSubmitting, errors, isSubmitted },
+    formState: { isSubmitting, errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     mode: 'onBlur',
@@ -88,7 +88,7 @@ export default function LoginPage() {
           Sign in to HTVeriDoc
         </h1>
         <p className="mt-2 text-sm text-muted-foreground">
-          Review purchase order confirmations with confidence.
+          Review purchase orders with confidence.
         </p>
       </div>
       <Card>
@@ -150,11 +150,6 @@ export default function LoginPage() {
                 className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive"
               >
                 {error}
-              </p>
-            ) : null}
-            {isSubmitted && Object.keys(errors).length > 0 && !error ? (
-              <p role="alert" className="text-sm text-destructive">
-                Please fix the highlighted fields and try again.
               </p>
             ) : null}
             <Button type="submit" disabled={isSubmitting} className="w-full">

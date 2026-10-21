@@ -5,6 +5,8 @@ out
 coverage
 .env
 .env.local
+.env.monolith
+.env.micro
 *.log
 .DS_Store
 # PDF / file data at repo root (do not ignore apps/api/src/storage source)

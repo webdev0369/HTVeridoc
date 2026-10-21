@@ -361,6 +361,8 @@ export class ReviewService {
         document.documentType,
         line,
       );
+      // Keep values the user just set — derivation must not overwrite them.
+      this.applyLineItemPatch(line, dto);
     } else if (
       dto.purchaseQuantity !== undefined ||
       (dto.quantity !== undefined && dto.purchaseQuantity === undefined)
@@ -441,6 +443,8 @@ export class ReviewService {
           document.documentType,
           line,
         );
+        // Keep values the user just set — derivation must not overwrite them.
+        this.applyLineItemPatch(line, patch);
       } else if (
         patch.purchaseQuantity !== undefined ||
         (patch.quantity !== undefined && patch.purchaseQuantity === undefined)
@@ -555,6 +559,8 @@ export class ReviewService {
         document.documentType,
         line,
       );
+      // Keep the mapped column value — derivation must not overwrite it.
+      this.applyLineColumnValue(line, dto.column, row.value ?? null);
       line.isUserEdited = true;
       updated += 1;
     }

@@ -507,7 +507,7 @@ export function AppShell({
           </div>
           <div className="ml-auto md:hidden">{userMenu}</div>
           <p className="hidden text-sm text-muted-foreground md:block">
-            Document intelligence for purchase order confirmations
+            Document intelligence for purchase orders
           </p>
         </header>
         <main className="w-full flex-1 px-5 py-6 sm:px-6 lg:px-8">

@@ -101,7 +101,7 @@ export default function RegisterPage() {
   const {
     register,
     handleSubmit,
-    formState: { isSubmitting, errors, isSubmitted },
+    formState: { isSubmitting, errors },
   } = useForm<FormValues>({
     resolver: zodResolver(schema),
     mode: 'onBlur',
@@ -189,11 +189,6 @@ export default function RegisterPage() {
                 {error}
               </p>
             )}
-            {isSubmitted && Object.keys(errors).length > 0 && !error ? (
-              <p role="alert" className="text-sm text-destructive">
-                Please fix the highlighted fields and try again.
-              </p>
-            ) : null}
             <Button type="submit" disabled={isSubmitting} className="w-full">
               {isSubmitting ? 'Creating…' : 'Create account'}
             </Button>

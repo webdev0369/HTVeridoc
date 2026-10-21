@@ -97,7 +97,7 @@ export class ExtractionService {
         DOCUMENT_TYPE_LABELS[
           document.documentType as keyof typeof DOCUMENT_TYPE_LABELS
         ] ?? document.documentType;
-      const message = `Extraction for ${label} is not available yet. Field settings can still be configured; only Purchase order confirmation is extractable in this version.`;
+      const message = `Extraction for ${label} is not available yet. Field settings can still be configured; only Purchase order is extractable in this version.`;
       extraction.status = 'failed';
       extraction.errorMessage = message;
       await this.extractionsRepo.save(extraction);

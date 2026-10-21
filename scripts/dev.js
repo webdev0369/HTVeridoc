@@ -122,6 +122,9 @@ async function main() {
   const env = envWithNodeFirst(binDir);
   console.log(`[dev] Node ${process.version} · ${binDir}`);
 
+  // Branch profile → root .env (monolith on main, micro on micro-services)
+  require('./sync-env').syncEnv();
+
   // Free ports (same Node is fine)
   const free = spawnSync(process.execPath, [path.join(__dirname, 'free-dev-ports.js')], {
     cwd: ROOT,

@@ -44,10 +44,15 @@ You should see `[dev] shell is v16...; re-exec under ...\v20.x.x`.
 ## Setup
 
 ```bash
-# From repo root
-cp .env.example .env
-# Edit DATABASE_URL to match your local Postgres credentials / JWT secrets
+# From repo root — use a branch profile (gitignored), not a hand-edited .env
+cp .env.example .env.monolith          # main / monolith
+# cp .env.micro.example .env.micro     # micro-services branch only
+# Edit DATABASE_URL / secrets in .env.monolith (or .env.micro)
 ```
+
+`node scripts/dev.js` (and `with-project-node.js`) copies the matching profile to `.env`:
+`main` → `.env.monolith`, branch name containing `micro` → `.env.micro`.
+Override with `HTVERIDOC_ENV=monolith` or `HTVERIDOC_ENV=micro`.
 
 Create the database (Windows example with PostgreSQL installer):
 

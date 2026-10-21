@@ -18,7 +18,6 @@ import {
 import {
   descriptionSeedOnArticleRow,
   expandDescriptionPick,
-  expandDescriptionPickForLine,
 } from '@/lib/description-pick';
 import type { BoundingBox } from '@/lib/types';
 
@@ -87,6 +86,8 @@ interface PdfViewerProps {
   onConfirmValue?: (value?: string) => void;
   /** Rossum-style: clear the selected field value */
   onClearValue?: () => void;
+  /** Dismiss the float without saving (reopen by clicking a field / line cell). */
+  onCloseSelection?: () => void;
   /** Map a whole PDF column onto a line-item field */
   columnMapMode?: boolean;
   columnMapHint?: string | null;
@@ -94,6 +95,11 @@ interface PdfViewerProps {
   confirming?: boolean;
   /** Description: expand multi-line product name on click. */
   appendPickHint?: boolean;
+  /**
+   * Fired when the active highlight is resolved against the PDF text layer.
+   * `located: false` means the value was not found on the page (do not scroll).
+   */
+  onHighlightLocated?: (located: boolean) => void;
   className?: string;
 }
 
@@ -245,6 +251,80 @@ function mergeBoxes(items: PdfTextItem[]): BoundingBox {
     y: minY,
     width: Math.max(0.004, maxX - minX),
     height: Math.max(0.01, maxY - minY),
+  };
+}
+
+/** Normalized page marquee (0–1). */
+interface MarqueeRect {
+  page: number;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+  append: boolean;
+}
+
+function marqueeBounds(m: MarqueeRect) {
+  return {
+    left: Math.min(m.x0, m.x1),
+    right: Math.max(m.x0, m.x1),
+    top: Math.min(m.y0, m.y1),
+    bottom: Math.max(m.y0, m.y1),
+  };
+}
+
+/** Collect PDF text tokens intersecting a drag rectangle (reading order). */
+function collectTextInMarquee(
+  pageItems: PdfTextItem[],
+  m: MarqueeRect,
+): { text: string; box: BoundingBox } | null {
+  const { left, right, top, bottom } = marqueeBounds(m);
+  if (right - left < 0.002 && bottom - top < 0.002) return null;
+
+  const hit = pageItems.filter((item) => {
+    const t = item.str.trim();
+    if (!t) return false;
+    const ix0 = item.x;
+    const iy0 = item.y;
+    const ix1 = item.x + item.width;
+    const iy1 = item.y + item.height;
+    return ix0 < right && ix1 > left && iy0 < bottom && iy1 > top;
+  });
+  if (!hit.length) return null;
+
+  hit.sort((a, b) => a.y - b.y || a.x - b.x);
+  const lines: PdfTextItem[][] = [];
+  for (const item of hit) {
+    const last = lines[lines.length - 1];
+    if (last && sameLine(last[0], item)) last.push(item);
+    else lines.push([item]);
+  }
+  const text = lines
+    .map((line) =>
+      [...line]
+        .sort((a, b) => a.x - b.x)
+        .map((i) => i.str.trim())
+        .filter(Boolean)
+        .join(' '),
+    )
+    .filter(Boolean)
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return null;
+  return { text, box: mergeBoxes(hit) };
+}
+
+function clientToPageNorm(
+  pageEl: HTMLElement,
+  clientX: number,
+  clientY: number,
+) {
+  const rect = pageEl.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
+  return {
+    x: Math.min(1, Math.max(0, (clientX - rect.left) / rect.width)),
+    y: Math.min(1, Math.max(0, (clientY - rect.top) / rect.height)),
   };
 }
 
@@ -665,16 +745,15 @@ function findValueBoxes(
     const inBand = scored.filter(
       (s) => Math.abs(boxCenterY(s.box) - preferredY) <= band,
     );
-    // Stay on the anchored row when possible.
+    // Stay on the anchored row when possible. If the AI bbox/`near` Y is
+    // wrong (e.g. header), do NOT return [] — that parked the float at the
+    // top of the page. Prefer the best text match on the page instead.
     if (inBand.length > 0) return [rankNear(inBand)[0].box];
     if (fromAnchorY != null) {
       const anchorBand = scored.filter(
         (s) => Math.abs(boxCenterY(s.box) - fromAnchorY) <= band,
       );
       if (anchorBand.length > 0) return [rankNear(anchorBand)[0].box];
-      // Do not fall back to a page-wide substring hit — similar product
-      // names (e.g. "Habanero Hot" vs "Habanero Hotsauce") steal the ring.
-      return [];
     }
     // Stale AI bbox only — don't pull toward a wrong Y.
     return [rankScore(scored)[0].box];
@@ -771,18 +850,6 @@ function findDateValueBoxes(
   return [hits[0].box];
 }
 
-function boxNearAnchorRow(
-  box: BoundingBox,
-  textItems: PdfTextItem[],
-  hints: string[] | null | undefined,
-): boolean {
-  const anchorY = findAnchorY(textItems, hints);
-  if (anchorY == null) return false;
-  // Multi-line product names sit below the Varenr — allow a taller band.
-  const band = Math.max(0.06, (box.height || 0.02) * 2.5);
-  return Math.abs(boxCenterY(box) - anchorY) <= band;
-}
-
 /** Product-name box on the same PDF row as this line's item code. */
 function descriptionBandOnAnchorRow(
   textItems: PdfTextItem[],
@@ -791,6 +858,81 @@ function descriptionBandOnAnchorRow(
   const seed = descriptionSeedOnArticleRow(textItems, hints);
   if (!seed) return null;
   return expandDescriptionPick(seed, textItems).box;
+}
+
+function boxNearAnchorRow(
+  box: BoundingBox,
+  textItems: PdfTextItem[],
+  hints: string[] | null | undefined,
+): boolean {
+  const anchorY = findAnchorY(textItems, hints);
+  if (anchorY == null) return true;
+  const band = 0.045;
+  return Math.abs(boxCenterY(box) - anchorY) <= band;
+}
+
+/**
+ * True when the highlight *value* appears in the PDF text layer.
+ * Ignores AI bounding-box fallbacks (those caused off-screen floats).
+ */
+function valueMatchedOnPage(
+  textItems: PdfTextItem[],
+  highlight: PdfHighlight,
+): boolean {
+  const rawValue = (highlight.value ?? '').trim();
+  if (!rawValue || textItems.length === 0) return false;
+
+  const dateParts = parseDateParts(rawValue);
+  if (dateParts) {
+    return (
+      findDateValueBoxes(textItems, dateParts, {
+        near: highlight.boundingBox,
+        anchorHints: highlight.anchorHints,
+      }).length > 0
+    );
+  }
+
+  const valueNum = parseHighlightNumber(rawValue);
+  const role = highlight.role ?? 'other';
+  const preferRight = role === 'quantity' || role === 'price';
+
+  if (valueNum != null && highlight.anchorHints?.length) {
+    if (
+      findNumericOnAnchorRow(
+        textItems,
+        valueNum,
+        highlight.anchorHints,
+        preferRight,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  if (isShortUnitToken(rawValue) && highlight.anchorHints?.length) {
+    if (findUnitOnAnchorRow(textItems, rawValue, highlight.anchorHints)) {
+      return true;
+    }
+  }
+
+  const fromText = findValueBoxes(textItems, highlight.value, {
+    near: highlight.boundingBox,
+    anchorHints: highlight.anchorHints,
+  });
+  if (fromText.length > 0) return true;
+
+  // After a user pick, the stored bbox is authoritative (footer notes, etc.).
+  if (role === 'text' && highlight.tone === 'edited' && highlight.boundingBox) {
+    return true;
+  }
+
+  // Description: product-name band on the article row counts as located,
+  // even when the stored value text differs slightly from the PDF.
+  if (role === 'text' && highlight.anchorHints?.length) {
+    return descriptionBandOnAnchorRow(textItems, highlight.anchorHints) != null;
+  }
+
+  return false;
 }
 
 /** Resolve highlight / popup anchor for a selection on a page. */
@@ -805,63 +947,51 @@ function resolveHighlightBoxes(
   const isDescription = role === 'text';
 
   // Dates: normalize in storage (ISO) but locate the printed form on the PDF.
-  // Skip for description role — a bad description like "11.08.2026 Fisketorget…"
-  // must not paint a green ring on a header date or another product row.
-  if (!isDescription) {
-    const dateParts = parseDateParts(rawValue);
-    if (dateParts) {
-      const dateBoxes = findDateValueBoxes(textItems, dateParts, {
-        near: highlight.boundingBox,
-        anchorHints: highlight.anchorHints,
-      });
-      if (dateBoxes.length > 0) return dateBoxes;
-    }
+  const dateParts = parseDateParts(rawValue);
+  if (dateParts) {
+    const dateBoxes = findDateValueBoxes(textItems, dateParts, {
+      near: highlight.boundingBox,
+      anchorHints: highlight.anchorHints,
+    });
+    if (dateBoxes.length > 0) return dateBoxes;
   }
 
-  // Description: keep the ring on this line's product name — never on a
-  // similar product above/below. Prefer a fresh PDF pick (trust the click),
-  // then text on the article row, then expand from the item-code row.
-  if (isDescription) {
+  // Description: after a user pick, keep the ring on what they clicked
+  // (including footer notes) — do not snap back to the product-name row.
+  if (isDescription && highlight.tone === 'edited' && highlight.boundingBox) {
+    return [highlight.boundingBox];
+  }
+
+  // Description (AI): keep the ring on this line's product name — never on Varenr.
+  if (isDescription && highlight.anchorHints?.length) {
+    const fromText = findValueBoxes(textItems, highlight.value, {
+      near: highlight.boundingBox,
+      anchorHints: highlight.anchorHints,
+    });
+    if (
+      fromText.length > 0 &&
+      boxNearAnchorRow(fromText[0], textItems, highlight.anchorHints)
+    ) {
+      return fromText;
+    }
+    const onRow = descriptionBandOnAnchorRow(
+      textItems,
+      highlight.anchorHints,
+    );
+    if (onRow) return [onRow];
     if (
       highlight.boundingBox &&
-      highlight.boundingBox.width < 0.5 &&
-      highlight.tone === 'edited'
+      boxNearAnchorRow(
+        highlight.boundingBox,
+        textItems,
+        highlight.anchorHints,
+      )
     ) {
       return [highlight.boundingBox];
     }
-    if (highlight.anchorHints?.length) {
-      const fromText = findValueBoxes(textItems, highlight.value, {
-        near: highlight.boundingBox,
-        anchorHints: highlight.anchorHints,
-      });
-      if (
-        fromText.length > 0 &&
-        fromText[0].width < 0.5 &&
-        boxNearAnchorRow(fromText[0], textItems, highlight.anchorHints)
-      ) {
-        return fromText;
-      }
-      const onRow = descriptionBandOnAnchorRow(
-        textItems,
-        highlight.anchorHints,
-      );
-      if (onRow) return [onRow];
-      if (
-        highlight.boundingBox &&
-        highlight.boundingBox.width < 0.5 &&
-        boxNearAnchorRow(
-          highlight.boundingBox,
-          textItems,
-          highlight.anchorHints,
-        )
-      ) {
-        return [highlight.boundingBox];
-      }
-      return [];
-    }
-    if (highlight.boundingBox && highlight.boundingBox.width < 0.5) {
-      return [highlight.boundingBox];
-    }
+    // Stale value from another row — still prefer this row's name band above.
+    if (fromText.length > 0) return fromText;
+    if (highlight.boundingBox) return [highlight.boundingBox];
     return [];
   }
 
@@ -931,54 +1061,54 @@ function resolveHighlightBoxes(
   return [];
 }
 
+type PageTextView = {
+  page: number;
+  height: number;
+  width: number;
+  textItems: PdfTextItem[];
+};
+
 /**
- * Park the edit popup at the found text — left edge, immediately below
- * (or above if no room). Avoid centering far away from the match.
+ * Find the highlight on any loaded page (prefer hint page, then scan others).
+ * Fixes floats docking top-right when the value lives further down / on another page.
  */
-function popupPositionStyle(box: BoundingBox): CSSProperties {
-  const boxLeft = box.x * 100;
-  const boxRight = (box.x + box.width) * 100;
-  const boxTop = box.y * 100;
-  const boxBottom = (box.y + box.height) * 100;
+function findHighlightLocation(
+  pages: PageTextView[],
+  highlight: PdfHighlight,
+): { page: number; boxes: BoundingBox[] } | null {
+  if (!pages.length) return null;
+  const preferred = highlight.page;
+  const ordered = [
+    ...(preferred != null
+      ? pages.filter((p) => p.page === preferred)
+      : []),
+    ...pages.filter((p) => p.page !== preferred),
+  ];
 
-  const spaceBelow = 100 - boxBottom;
-  const spaceAbove = boxTop;
-  const spaceRight = 100 - boxRight;
-  const spaceLeft = boxLeft;
-  const sideRoom = 26;
-  const leftPct = Math.min(Math.max(boxLeft, 2), 58);
-
-  // Prefer below/above so the highlighted value stays visible and clickable.
-  if (spaceBelow >= 14 || spaceAbove >= 14) {
-    const placeBelow = spaceBelow >= 12 || spaceBelow >= spaceAbove;
-    return {
-      left: `${leftPct}%`,
-      top: placeBelow ? `${boxBottom}%` : `${boxTop}%`,
-      transform: placeBelow
-        ? 'translate(0, 8px)'
-        : 'translate(0, calc(-100% - 8px))',
-    };
+  for (const p of ordered) {
+    if (!p.textItems.length) continue;
+    if (!valueMatchedOnPage(p.textItems, highlight)) continue;
+    let boxes = resolveHighlightBoxes(p.textItems, highlight);
+    if (!boxes.length) {
+      const role = highlight.role ?? 'other';
+      if (role === 'text' && highlight.anchorHints?.length) {
+        const band = descriptionBandOnAnchorRow(
+          p.textItems,
+          highlight.anchorHints,
+        );
+        if (band) boxes = [band];
+      }
+    }
+    if (boxes.length) return { page: p.page, boxes };
   }
-
-  const placeRight = spaceRight >= sideRoom || spaceRight >= spaceLeft;
-  return {
-    left: placeRight ? `${boxRight}%` : `${boxLeft}%`,
-    top: `${Math.min(Math.max(boxTop, 0.5), 82)}%`,
-    transform: placeRight
-      ? 'translate(10px, 0)'
-      : 'translate(calc(-100% - 10px), 0)',
-  };
+  return null;
 }
 
-/** Fallback when no PDF box is known yet. */
-function popupDockStyle(): CSSProperties {
-  return {
-    right: '12px',
-    bottom: '12px',
-    left: 'auto',
-    top: 'auto',
-    transform: 'none',
-  };
+/** True when every rendered page has a text layer (or there are no pages yet). */
+function allPageTextReady(pages: PageTextView[], pageCount: number) {
+  if (pageCount < 1) return false;
+  if (pages.length < pageCount) return false;
+  return pages.every((p) => p.textItems.length > 0);
 }
 
 export function PdfViewer({
@@ -990,14 +1120,34 @@ export function PdfViewer({
   onValuePick,
   onConfirmValue,
   onClearValue,
+  onCloseSelection,
   columnMapMode = false,
   columnMapHint = null,
   onColumnMapSeedPick,
   confirming = false,
   appendPickHint = false,
+  onHighlightLocated,
   className = '',
 }: PdfViewerProps) {
   const textPickEnabled = pickMode || columnMapMode;
+
+  // Escape closes the float (same as X) without clearing the field value.
+  useEffect(() => {
+    if (!pickMode || !onCloseSelection) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      e.preventDefault();
+      onCloseSelection();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [pickMode, onCloseSelection]);
+
+  useEffect(() => {
+    if (pickMode) return;
+    marqueeRef.current = null;
+    setMarquee(null);
+  }, [pickMode]);
   const containerRef = useRef<HTMLDivElement>(null);
   const pageElRefs = useRef<Map<number, HTMLDivElement>>(new Map());
   const canvasRefs = useRef<Map<number, HTMLCanvasElement>>(new Map());
@@ -1014,6 +1164,10 @@ export function PdfViewer({
   const [loading, setLoading] = useState(true);
   const [rendering, setRendering] = useState(false);
   const [pages, setPages] = useState<PageView[]>([]);
+  /** Drag-to-select rectangle on the PDF (pick mode). */
+  const [marquee, setMarquee] = useState<MarqueeRect | null>(null);
+  const marqueeRef = useRef<MarqueeRect | null>(null);
+  const marqueeDraggedRef = useRef(false);
 
   const page = controlledPage ?? internalPage;
 
@@ -1251,70 +1405,95 @@ export function PdfViewer({
     return () => container.removeEventListener('scroll', onScroll);
   }, [pageCount, onPageChange, controlledPage]);
 
-  // Scroll to highlight only when the selected *field* changes — not when the
-  // user edits/confirms the value (that was jumping the view to the wrong place).
+  // Locate on any page (not only highlight.page), then scroll to that box.
   const lastScrollKeyRef = useRef<string | null>(null);
+  const highlightLocation = useMemo(() => {
+    if (!highlight || !pages.length) return null;
+    return findHighlightLocation(pages, highlight);
+  }, [highlight, pages]);
+
+  const floatPage =
+    highlightLocation?.page ?? highlight?.page ?? page;
+
   useEffect(() => {
-    if (!highlight?.page || !pages.length) return;
-    const target = pages.find((p) => p.page === highlight.page);
-    if (!target?.height) return;
+    if (!highlight || !pages.length) return;
 
-    const scrollKey = `${highlight.label ?? ''}::${highlight.page}`;
+    const scrollKey = `${highlight.label ?? ''}::${highlight.page ?? ''}::${(highlight.value ?? '').trim()}::${(highlight.anchorHints ?? []).join('|')}`;
+
+    if (highlightLocation) {
+      onHighlightLocated?.(true);
+      if (lastScrollKeyRef.current === scrollKey) return;
+      lastScrollKeyRef.current = scrollKey;
+
+      const target = pages.find((p) => p.page === highlightLocation.page);
+      const box = highlightLocation.boxes[0];
+      const pageEl = pageElRefs.current.get(highlightLocation.page);
+      const container = containerRef.current;
+      if (!target?.height || !pageEl || !container || !box) return;
+
+      scrollLockRef.current = true;
+      const pageOffset = pageEl.offsetTop - container.offsetTop;
+      const boxTop = box.y * target.height;
+      container.scrollTo({
+        top: Math.max(0, pageOffset + boxTop - 80),
+        behavior: 'smooth',
+      });
+      setPage(highlightLocation.page);
+      const t = window.setTimeout(() => {
+        scrollLockRef.current = false;
+      }, 450);
+      return () => window.clearTimeout(t);
+    }
+
+    // Not found yet — wait for text layers; only then mark "not located".
+    if (!allPageTextReady(pages, pageCount)) {
+      onHighlightLocated?.(false);
+      return;
+    }
     if (lastScrollKeyRef.current === scrollKey) return;
-    // Wait until text layer is ready so we can locate the box once.
-    if (!target.textItems.length && !highlight.boundingBox) return;
     lastScrollKeyRef.current = scrollKey;
-
-    const boxes = resolveHighlightBoxes(target.textItems, highlight);
-    const box = boxes[0] ?? highlight.boundingBox;
-    const pageEl = pageElRefs.current.get(highlight.page);
-    const container = containerRef.current;
-    if (!pageEl || !container) return;
-
-    scrollLockRef.current = true;
-    const pageOffset = pageEl.offsetTop - container.offsetTop;
-    const boxTop = box ? box.y * target.height : 0;
-    container.scrollTo({
-      top: Math.max(0, pageOffset + boxTop - 80),
-      behavior: 'smooth',
-    });
-    setPage(highlight.page);
-    const t = window.setTimeout(() => {
-      scrollLockRef.current = false;
-    }, 450);
-    return () => window.clearTimeout(t);
+    onHighlightLocated?.(false);
   }, [
-    highlight?.page,
-    highlight?.label,
-    highlight?.boundingBox,
-    highlight?.value,
-    highlight?.anchorHints,
+    highlight,
+    highlightLocation,
     pages,
+    pageCount,
     setPage,
+    onHighlightLocated,
   ]);
 
   // Reset scroll memory when highlight clears so the next field selection scrolls again.
   useEffect(() => {
-    if (!highlight) lastScrollKeyRef.current = null;
-  }, [highlight]);
+    if (!highlight) {
+      lastScrollKeyRef.current = null;
+      onHighlightLocated?.(false);
+    }
+  }, [highlight, onHighlightLocated]);
 
   const activePageView = useMemo(
-    () => pages.find((p) => p.page === (highlight?.page ?? page)) ?? null,
-    [pages, highlight?.page, page],
+    () => pages.find((p) => p.page === floatPage) ?? null,
+    [pages, floatPage],
   );
 
-  const matchedBoxes = useMemo(() => {
-    if (!highlight || !activePageView) return [] as BoundingBox[];
-    if (highlight.page !== activePageView.page) return [];
-    return resolveHighlightBoxes(activePageView.textItems, highlight);
-  }, [highlight, activePageView]);
+  const valueLocated = Boolean(highlightLocation);
+  const matchedBoxes = highlightLocation?.boxes ?? [];
 
-  const primaryBox = matchedBoxes[0] ?? null;
+  const primaryBox =
+    matchedBoxes[0] ??
+    (highlight?.tone === 'edited' ? highlight.boundingBox : undefined) ??
+    null;
+
   const showActive =
     Boolean(highlight) &&
     Boolean(activePageView) &&
-    highlight!.page === activePageView!.page &&
+    valueLocated &&
+    floatPage === activePageView!.page &&
     activePageView!.width > 0;
+
+  const showFloat =
+    Boolean(pickMode && highlight) &&
+    Boolean(activePageView) &&
+    floatPage === activePageView!.page;
 
   if (loading) {
     return (
@@ -1366,10 +1545,11 @@ export function PdfViewer({
               'Map column: click any value in the PDF column to fill all rows'}
           </span>
         )}
-        {!columnMapMode && pickMode && (
-          <span className="rounded bg-[#3b82f6]/20 px-2 py-0.5 text-[11px] font-medium text-[#93c5fd]">
-            Type the correct value, or click it on the PDF — “
-            {highlight?.label ?? 'field'}”
+        {!columnMapMode && (
+          <span className="min-w-0 flex-1 truncate px-3 text-center text-[11px] text-slate-400">
+            {pickMode
+              ? 'Drag to select the text you want as the value'
+              : 'Click a field first, then drag to select its text'}
           </span>
         )}
         {rendering && (
@@ -1412,9 +1592,9 @@ export function PdfViewer({
               }))
           ).map((pageView) => {
             const isHighlightPage =
-              showActive && highlight?.page === pageView.page;
+              showActive && floatPage === pageView.page;
             const pageBoxes = isHighlightPage ? matchedBoxes : [];
-            const pagePrimary = isHighlightPage ? primaryBox : null;
+            const pageHasFloat = showFloat && floatPage === pageView.page;
 
             return (
               <div
@@ -1439,20 +1619,17 @@ export function PdfViewer({
                 />
 
                 <div className="absolute inset-0">
+                  {/* Token hit targets — used for column-map; visual only in pick mode
+                      (drag overlay handles selection). */}
                   {pageView.textItems.map((item) => (
                     <button
                       key={item.id}
                       type="button"
                       title={item.str}
-                      disabled={!textPickEnabled}
-                      // Prevent input blur (table/popup) from eating the click —
-                      // otherwise description picks look like they "do nothing".
-                      onMouseDown={(e) => {
-                        if (textPickEnabled) e.preventDefault();
-                      }}
+                      disabled={!textPickEnabled || (pickMode && !columnMapMode)}
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (!textPickEnabled) return;
+                        if (!columnMapMode || !onColumnMapSeedPick) return;
                         const pageEl = pageElRefs.current.get(pageView.page);
                         const rect = pageEl?.getBoundingClientRect();
                         const seed =
@@ -1464,80 +1641,172 @@ export function PdfViewer({
                                 item,
                               )
                             : item;
-                        if (columnMapMode && onColumnMapSeedPick) {
-                          onColumnMapSeedPick({
-                            page: pageView.page,
-                            seed,
-                            pageItems: pageView.textItems,
-                          });
-                          return;
-                        }
-                        if (!onValuePick) return;
-                        if (appendPickHint) {
-                          // Expand the clicked product name (replace). Fall back
-                          // to the raw glyph if expand yields nothing.
-                          const expanded = expandDescriptionPickForLine(
-                            seed,
-                            pageView.textItems,
-                            highlight?.anchorHints,
-                          );
-                          const text =
-                            expanded.text.trim() || seed.str.trim();
-                          if (!text) return;
-                          onValuePick(
-                            text,
-                            expanded.text.trim()
-                              ? expanded.box
-                              : {
-                                  x: seed.x,
-                                  y: seed.y,
-                                  width: seed.width,
-                                  height: seed.height,
-                                },
-                            { append: e.shiftKey },
-                          );
-                          return;
-                        }
-                        onValuePick(
-                          seed.str.trim(),
-                          {
-                            x: seed.x,
-                            y: seed.y,
-                            width: seed.width,
-                            height: seed.height,
-                          },
-                          { append: e.shiftKey },
-                        );
+                        onColumnMapSeedPick({
+                          page: pageView.page,
+                          seed,
+                          pageItems: pageView.textItems,
+                        });
                       }}
-                      className={`absolute rounded-[2px] ${
-                        textPickEnabled
-                          ? columnMapMode
-                            ? 'cursor-crosshair hover:bg-amber-400/30 hover:ring-1 hover:ring-amber-400'
-                            : 'cursor-crosshair hover:bg-[#3b82f6]/25 hover:ring-1 hover:ring-[#3b82f6]'
-                          : 'pointer-events-none'
+                      className={`absolute z-10 rounded-[2px] ${
+                        columnMapMode
+                          ? 'cursor-crosshair hover:bg-amber-400/30 hover:ring-1 hover:ring-amber-400'
+                          : pickMode
+                            ? 'pointer-events-none'
+                            : 'pointer-events-none'
                       }`}
                       style={{
                         left: `${item.x * 100}%`,
                         top: `${item.y * 100}%`,
                         width: `${item.width * 100}%`,
-                        // Keep hit height close to real glyphs so rows don't overlap.
                         height: `${Math.max(item.height * 100, 0.45)}%`,
                       }}
                     />
                   ))}
                 </div>
 
-                {/* Popup first (lower z), highlight ring on top so the PDF value stays readable. */}
-                {isHighlightPage && highlight && (
-                  <HighlightPopup
-                    highlight={highlight}
-                    primaryBox={pagePrimary}
-                    pickMode={pickMode}
-                    confirming={confirming}
-                    appendPickHint={appendPickHint}
-                    onConfirmValue={onConfirmValue}
-                    onClearValue={onClearValue}
-                  />
+                {/* Drag-to-select (start → end) when editing a field. */}
+                {pickMode && !columnMapMode && (
+                  <div
+                    className="absolute inset-0 z-20 cursor-crosshair touch-none"
+                    onPointerDown={(e) => {
+                      if (!onValuePick || e.button !== 0) return;
+                      const pageEl = pageElRefs.current.get(pageView.page);
+                      if (!pageEl) return;
+                      e.preventDefault();
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                      const n = clientToPageNorm(
+                        pageEl,
+                        e.clientX,
+                        e.clientY,
+                      );
+                      const next: MarqueeRect = {
+                        page: pageView.page,
+                        x0: n.x,
+                        y0: n.y,
+                        x1: n.x,
+                        y1: n.y,
+                        append: e.shiftKey,
+                      };
+                      marqueeRef.current = next;
+                      marqueeDraggedRef.current = false;
+                      setMarquee(next);
+                    }}
+                    onPointerMove={(e) => {
+                      const cur = marqueeRef.current;
+                      if (!cur || cur.page !== pageView.page) return;
+                      const pageEl = pageElRefs.current.get(pageView.page);
+                      if (!pageEl) return;
+                      const n = clientToPageNorm(
+                        pageEl,
+                        e.clientX,
+                        e.clientY,
+                      );
+                      const dist = Math.hypot(n.x - cur.x0, n.y - cur.y0);
+                      if (dist > 0.01) marqueeDraggedRef.current = true;
+                      const next = { ...cur, x1: n.x, y1: n.y };
+                      marqueeRef.current = next;
+                      setMarquee(next);
+                    }}
+                    onPointerUp={(e) => {
+                      const cur = marqueeRef.current;
+                      marqueeRef.current = null;
+                      setMarquee(null);
+                      if (!cur || cur.page !== pageView.page || !onValuePick) {
+                        return;
+                      }
+                      const pageEl = pageElRefs.current.get(pageView.page);
+                      if (!pageEl) return;
+                      const n = clientToPageNorm(
+                        pageEl,
+                        e.clientX,
+                        e.clientY,
+                      );
+                      const finalRect = { ...cur, x1: n.x, y1: n.y };
+
+                      if (marqueeDraggedRef.current) {
+                        const collected = collectTextInMarquee(
+                          pageView.textItems,
+                          finalRect,
+                        );
+                        if (collected?.text) {
+                          onValuePick(collected.text, collected.box, {
+                            append: finalRect.append,
+                          });
+                        }
+                        return;
+                      }
+
+                      // Short click → single token (description expands).
+                      const underClick = pageView.textItems.find((item) => {
+                        if (!item.str.trim()) return false;
+                        const padY = Math.max(item.height * 0.15, 0.001);
+                        const padX = Math.max(item.width * 0.02, 0.001);
+                        return (
+                          n.x >= item.x - padX &&
+                          n.x <= item.x + item.width + padX &&
+                          n.y >= item.y - padY &&
+                          n.y <= item.y + item.height + padY
+                        );
+                      });
+                      if (!underClick) return;
+                      const seed = resolveTextItemAtClick(
+                        pageView.textItems,
+                        n.x,
+                        n.y,
+                        underClick,
+                      );
+                      if (!seed.str.trim()) return;
+                      if (appendPickHint) {
+                        const expanded = expandDescriptionPick(
+                          seed,
+                          pageView.textItems,
+                        );
+                        const text =
+                          expanded.text.trim() || seed.str.trim();
+                        if (!text) return;
+                        onValuePick(text, expanded.box, {
+                          append: finalRect.append,
+                        });
+                        return;
+                      }
+                      onValuePick(
+                        seed.str.trim(),
+                        {
+                          x: seed.x,
+                          y: seed.y,
+                          width: seed.width,
+                          height: seed.height,
+                        },
+                        { append: finalRect.append },
+                      );
+                    }}
+                    onPointerCancel={() => {
+                      marqueeRef.current = null;
+                      setMarquee(null);
+                    }}
+                  >
+                    {marquee && marquee.page === pageView.page && (
+                      <div
+                        className="pointer-events-none absolute border-2 border-[#3b82f6] bg-[#3b82f6]/20"
+                        style={{
+                          left: `${marqueeBounds(marquee).left * 100}%`,
+                          top: `${marqueeBounds(marquee).top * 100}%`,
+                          width: `${Math.max(
+                            (marqueeBounds(marquee).right -
+                              marqueeBounds(marquee).left) *
+                              100,
+                            0.3,
+                          )}%`,
+                          height: `${Math.max(
+                            (marqueeBounds(marquee).bottom -
+                              marqueeBounds(marquee).top) *
+                              100,
+                            0.3,
+                          )}%`,
+                        }}
+                      />
+                    )}
+                  </div>
                 )}
 
                 {pageBoxes.map((box, i) => (
@@ -1555,6 +1824,22 @@ export function PdfViewer({
                   />
                 ))}
 
+                {pageHasFloat && highlight && (
+                  <HighlightPopup
+                    highlight={highlight}
+                    primaryBox={
+                      floatPage === pageView.page ? primaryBox : null
+                    }
+                    pickMode={pickMode}
+                    confirming={confirming}
+                    appendPickHint={appendPickHint}
+                    valueLocated={valueLocated}
+                    onConfirmValue={onConfirmValue}
+                    onClearValue={onClearValue}
+                    onCloseSelection={onCloseSelection}
+                  />
+                )}
+
                 {pageCount > 1 && (
                   <span className="pointer-events-none absolute bottom-2 right-2 rounded bg-black/50 px-1.5 py-0.5 text-[10px] font-medium text-white/80">
                     {pageView.page}
@@ -1569,119 +1854,215 @@ export function PdfViewer({
   );
 }
 
+/**
+ * Park the edit popup clear of the highlight so the printed value stays
+ * visible and clickable. Prefer below the row, else beside.
+ */
+function popupPositionStyle(box: BoundingBox): CSSProperties {
+  const boxLeft = box.x * 100;
+  const boxRight = (box.x + box.width) * 100;
+  const boxTop = box.y * 100;
+  const boxBottom = (box.y + box.height) * 100;
+  const boxCenterX = (box.x + box.width / 2) * 100;
+
+  const spaceBelow = 100 - boxBottom;
+  const spaceAbove = boxTop;
+  const spaceRight = 100 - boxRight;
+  const spaceLeft = boxLeft;
+  const sideRoom = 26;
+
+  if (spaceBelow >= 20 || spaceAbove >= 20) {
+    const placeBelow = spaceBelow >= 18 || spaceBelow >= spaceAbove;
+    return {
+      left: `${Math.min(Math.max(boxCenterX, 16), 84)}%`,
+      top: placeBelow ? `${boxBottom}%` : `${boxTop}%`,
+      transform: placeBelow
+        ? 'translate(-50%, 14px)'
+        : 'translate(-50%, calc(-100% - 14px))',
+    };
+  }
+
+  const placeRight = spaceRight >= sideRoom || spaceRight >= spaceLeft;
+  return {
+    left: placeRight ? `${boxRight}%` : `${boxLeft}%`,
+    top: `${Math.min(Math.max(boxTop, 0.5), 82)}%`,
+    transform: placeRight
+      ? 'translate(10px, 0)'
+      : 'translate(calc(-100% - 10px), 0)',
+  };
+}
+
+/** Floating editor on the PDF (input/actions only capture clicks). */
 function HighlightPopup({
   highlight,
   primaryBox,
   pickMode,
   confirming,
   appendPickHint,
+  valueLocated,
   onConfirmValue,
   onClearValue,
+  onCloseSelection,
 }: {
   highlight: PdfHighlight;
   primaryBox: BoundingBox | null;
   pickMode: boolean;
   confirming: boolean;
   appendPickHint?: boolean;
+  valueLocated: boolean;
   onConfirmValue?: (value?: string) => void;
   onClearValue?: () => void;
+  onCloseSelection?: () => void;
 }) {
   const [draft, setDraft] = useState(highlight.value ?? '');
+  const inputRef = useRef<HTMLInputElement>(null);
+  const openedKeyRef = useRef<string | null>(null);
+  const openKey = `${highlight.label ?? ''}::${highlight.page ?? ''}`;
 
   useEffect(() => {
     setDraft(highlight.value ?? '');
-  }, [highlight.value, highlight.label, highlight.page, highlight.boundingBox]);
+  }, [highlight.value, highlight.label, highlight.page]);
 
-  // Allow confirm with empty value so optional line cells can be skipped.
+  useEffect(() => {
+    if (openedKeyRef.current === openKey) return;
+    openedKeyRef.current = openKey;
+    inputRef.current?.focus();
+    inputRef.current?.select();
+  }, [openKey]);
+
   const canSave = pickMode && !confirming;
-
-  const anchorBox = primaryBox ?? highlight.boundingBox ?? null;
+  // Prefer live text-layer box; only use stored AI bbox after a user pick
+  // (edited) so we never park the float on a wrong/stale header region.
+  const anchorBox =
+    primaryBox ??
+    (highlight.tone === 'edited' ? highlight.boundingBox : null) ??
+    null;
 
   return (
     <div
-      className="pointer-events-none absolute z-30 w-[240px] max-w-[min(240px,calc(100%-16px))] rounded-xl bg-[#1a2230]/95 p-2.5 text-white shadow-2xl ring-1 ring-[#3b82f6]/50 backdrop-blur-[2px]"
+      className="pointer-events-none absolute z-30 w-[260px] max-w-[min(260px,calc(100%-16px))] rounded-xl bg-[#1a2230]/95 p-2.5 text-white shadow-2xl ring-1 ring-[#3b82f6]/50 backdrop-blur-[2px]"
       style={
-        anchorBox ? popupPositionStyle(anchorBox) : popupDockStyle()
+        anchorBox
+          ? popupPositionStyle(anchorBox)
+          : // Not located yet: bottom-center of the page (not top-right over headers)
+            {
+              left: '50%',
+              bottom: '16px',
+              top: 'auto',
+              right: 'auto',
+              transform: 'translateX(-50%)',
+            }
       }
     >
-      {/* Only input + actions capture clicks — labels pass through so PDF
-          rows under the float (e.g. next product name) stay selectable. */}
       <div
         className="pointer-events-auto rounded-lg border border-white/15 bg-[#0f1419] px-2.5 py-2"
         onMouseDown={(e) => e.stopPropagation()}
       >
-        {pickMode ? (
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && canSave) {
-                e.preventDefault();
-                onConfirmValue?.(draft.trim());
-              }
-            }}
-            className="w-full border-0 bg-transparent text-[17px] font-semibold leading-tight tracking-tight text-white outline-none placeholder:text-slate-600"
-            placeholder="Enter value…"
-            aria-label={highlight.label || 'Field value'}
-            autoFocus
-          />
-        ) : (
-          <p className="truncate text-[17px] font-semibold leading-tight tracking-tight">
-            {highlight.value || '—'}
-          </p>
-        )}
+        <input
+          ref={inputRef}
+          value={draft}
+          disabled={!pickMode || confirming}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && onCloseSelection) {
+              e.preventDefault();
+              e.stopPropagation();
+              onCloseSelection();
+              return;
+            }
+            if (e.key === 'Enter' && canSave) {
+              e.preventDefault();
+              onConfirmValue?.(draft.trim());
+            }
+          }}
+          className="w-full border-0 bg-transparent text-[17px] font-semibold leading-tight tracking-tight text-white outline-none placeholder:text-slate-600"
+          placeholder="Enter value…"
+          aria-label={highlight.label || 'Field value'}
+        />
       </div>
       <p className="pointer-events-none mt-1.5 truncate px-0.5 text-xs text-slate-400">
         {highlight.label || 'Selected field'}
       </p>
       <p className="pointer-events-none mt-1 px-0.5 text-[11px] text-slate-500">
         {appendPickHint
-          ? 'Click the correct product name on the PDF (replaces). Shift+click to add more, then ✓'
-          : 'Type the correct value, or click it on the PDF, then press ✓'}
+          ? 'Drag on the PDF to select text (or click a word). Shift+drag appends, then ✓'
+          : valueLocated
+            ? 'Drag or click text on the PDF, then press ✓'
+            : 'Drag to select text on the PDF, or type here, then ✓'}
       </p>
-      {!anchorBox && (
-        <p className="pointer-events-none mt-1 px-0.5 text-[11px] text-amber-300/90">
-          Click text on the PDF to reassign
-        </p>
-      )}
       <div
-        className="pointer-events-auto mt-2 flex items-center justify-end gap-2 border-t border-white/10 pt-2"
+        className="pointer-events-auto mt-2 flex items-center gap-2 border-t border-white/10 pt-2"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <button
           type="button"
-          title="Clear value"
-          disabled={!pickMode || confirming}
+          title="Close editor (Esc)"
+          disabled={!onCloseSelection || confirming}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => {
             e.preventDefault();
             e.stopPropagation();
-            onClearValue?.();
+            onCloseSelection?.();
           }}
           className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
         >
-          <TrashIcon />
+          <CloseIcon />
         </button>
-        <button
-          type="button"
-          title="Save and go to next"
-          disabled={!canSave}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={(e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            onConfirmValue?.(draft.trim());
-          }}
-          className={`inline-flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-40 ${
-            highlight.tone === 'edited'
-              ? 'bg-emerald-500 text-white ring-2 ring-emerald-300/50'
-              : 'bg-emerald-500 text-white hover:bg-emerald-400'
-          }`}
-        >
-          <CheckIcon />
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            title="Clear value"
+            disabled={!pickMode || confirming}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onClearValue?.();
+            }}
+            className="inline-flex h-8 w-8 items-center justify-center rounded-md text-slate-300 hover:bg-white/10 hover:text-white disabled:opacity-40"
+          >
+            <TrashIcon />
+          </button>
+          <button
+            type="button"
+            title="Save and go to next"
+            disabled={!canSave}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onConfirmValue?.(draft.trim());
+            }}
+            className={`inline-flex h-8 w-8 items-center justify-center rounded-full disabled:opacity-40 ${
+              highlight.tone === 'edited'
+                ? 'bg-emerald-500 text-white ring-2 ring-emerald-300/50'
+                : 'bg-emerald-500 text-white hover:bg-emerald-400'
+            }`}
+          >
+            <CheckIcon />
+          </button>
+        </div>
       </div>
     </div>
+  );
+}
+
+function CloseIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M18 6L6 18" />
+      <path d="M6 6l12 12" />
+    </svg>
   );
 }
 

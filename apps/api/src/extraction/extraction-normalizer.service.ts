@@ -242,7 +242,9 @@ export class ExtractionNormalizerService {
       });
 
       // Derive units from packaging text + qty conversions (same units → factor 1, etc.).
+      // Skip rows the user already edited so reprocess cannot wipe their values.
       for (const row of lineRows) {
+        if (row.isUserEdited) continue;
         const derived = deriveLineUnitFields(
           {
             purchaseUnit: row.purchaseUnit,
