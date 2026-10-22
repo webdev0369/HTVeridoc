@@ -422,10 +422,10 @@ function FieldRow({
     setDirty(false);
   };
 
+  const hasValue = Boolean((value || field.currentValue || '').trim());
+  // Empty extraction or value not found on the PDF → guide in the sidebar, not a PDF float.
   const notOnDocument =
-    selected &&
-    pdfValueLocated === false &&
-    Boolean((value || field.currentValue || '').trim());
+    selected && (pdfValueLocated === false || !hasValue);
 
   return (
     <div
@@ -530,8 +530,10 @@ function FieldRow({
       {notOnDocument && (
         <p className="mt-1.5 text-[11px] leading-snug text-slate-500">
           {isCurrency
-            ? 'Not found on the document. Confirm the code or choose from the list.'
-            : 'Not found on the document. Enter the value here or click it on the PDF if it appears elsewhere.'}
+            ? 'Not found. Confirm the code here or choose from the list.'
+            : !hasValue
+              ? 'Not found. Enter a value here, or drag to select it on the PDF.'
+              : 'Not found on the document. Enter the value here, or drag to select it on the PDF.'}
         </p>
       )}
       {field.isUserEdited &&

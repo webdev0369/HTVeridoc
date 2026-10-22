@@ -9,6 +9,14 @@ import { AppShell } from '@/components/app-shell';
 import { StatusBadge } from '@/components/status-badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -38,15 +46,31 @@ import type {
   DocumentTypeOptionDto,
 } from '@/lib/types';
 
+const DEFAULT_DOCUMENT_TYPE = 'PURCHASE_ORDER_CONFIRMATION';
+
+const FALLBACK_TYPES: DocumentTypeOptionDto[] = [
+  {
+    documentType: DEFAULT_DOCUMENT_TYPE,
+    label: 'Purchase order',
+    extractionSupported: true,
+  },
+];
+
 export default function DocumentsPage() {
   const inputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
-  const [documentType, setDocumentType] = useState(
-    'PURCHASE_ORDER_CONFIRMATION',
-  );
-  const [queueId, setQueueId] = useState<string>('none');
+
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [filterQueueId, setFilterQueueId] = useState<string>('all');
+  const [filterDocumentType, setFilterDocumentType] = useState<string>('all');
+
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploadQueueId, setUploadQueueId] = useState<string>('none');
+  const [uploadDocumentType, setUploadDocumentType] = useState(
+    DEFAULT_DOCUMENT_TYPE,
+  );
+  const [pendingFile, setPendingFile] = useState<File | null>(null);
 
   const { data, isLoading, error: loadError } = useQuery({
     queryKey: ['documents'],
@@ -64,26 +88,28 @@ export default function DocumentsPage() {
     queryFn: () => apiFetch<DocumentQueueDto[]>('/document-queues'),
   });
 
+  const documentTypes = typesQuery.data ?? FALLBACK_TYPES;
+
   const activeQueues = useMemo(
     () => (queuesQuery.data ?? []).filter((q) => q.isActive),
     [queuesQuery.data],
   );
 
-  const selectedQueue = activeQueues.find((q) => q.id === queueId);
+  const uploadSelectedQueue = activeQueues.find((q) => q.id === uploadQueueId);
 
   useEffect(() => {
-    if (selectedQueue) {
-      setDocumentType(selectedQueue.documentType);
+    if (uploadSelectedQueue) {
+      setUploadDocumentType(uploadSelectedQueue.documentType);
     }
-  }, [selectedQueue]);
+  }, [uploadSelectedQueue]);
 
   const upload = useMutation({
     mutationFn: async (file: File) => {
       const form = new FormData();
       form.append('file', file);
-      form.append('documentType', documentType);
-      if (queueId !== 'none') {
-        form.append('queueId', queueId);
+      form.append('documentType', uploadDocumentType);
+      if (uploadQueueId !== 'none') {
+        form.append('queueId', uploadQueueId);
       }
       return apiFetch<DocumentDto>('/documents', {
         method: 'POST',
@@ -94,14 +120,18 @@ export default function DocumentsPage() {
       void queryClient.invalidateQueries({ queryKey: ['documents'] });
       void queryClient.invalidateQueries({ queryKey: ['document-queues'] });
       toast.success(`Uploaded ${doc.fileName}`);
+      setUploadOpen(false);
+      setPendingFile(null);
+      setUploadQueueId('none');
+      setUploadDocumentType(DEFAULT_DOCUMENT_TYPE);
     },
     onError: (err) => {
       toast.error(err instanceof ApiError ? err.message : 'Upload failed');
     },
   });
 
-  const selectedType = (typesQuery.data ?? []).find(
-    (t) => t.documentType === documentType,
+  const uploadSelectedType = documentTypes.find(
+    (t) => t.documentType === uploadDocumentType,
   );
 
   const queueNameById = useMemo(() => {
@@ -117,6 +147,20 @@ export default function DocumentsPage() {
     const q = search.trim().toLowerCase();
     return items.filter((doc) => {
       if (statusFilter !== 'all' && doc.status !== statusFilter) return false;
+      if (filterQueueId === 'none' && doc.queueId) return false;
+      if (
+        filterQueueId !== 'all' &&
+        filterQueueId !== 'none' &&
+        doc.queueId !== filterQueueId
+      ) {
+        return false;
+      }
+      if (
+        filterDocumentType !== 'all' &&
+        doc.documentType !== filterDocumentType
+      ) {
+        return false;
+      }
       if (!q) return true;
       const queueName = doc.queueId
         ? (queueNameById.get(doc.queueId) ?? '')
@@ -128,95 +172,45 @@ export default function DocumentsPage() {
         queueName.toLowerCase().includes(q)
       );
     });
-  }, [data?.items, search, statusFilter, queueNameById]);
+  }, [
+    data?.items,
+    search,
+    statusFilter,
+    filterQueueId,
+    filterDocumentType,
+    queueNameById,
+  ]);
 
   const statuses = useMemo(() => {
     const set = new Set((data?.items ?? []).map((d) => d.status));
     return Array.from(set).sort();
   }, [data?.items]);
 
+  const openUploadDialog = () => {
+    setPendingFile(null);
+    setUploadQueueId('none');
+    setUploadDocumentType(DEFAULT_DOCUMENT_TYPE);
+    setUploadOpen(true);
+  };
+
+  const submitUpload = () => {
+    if (!pendingFile || upload.isPending) return;
+    upload.mutate(pendingFile);
+  };
+
   return (
     <AppShell>
       <div className="space-y-6">
         <PageHeader
           title="Documents"
-          description="Upload PDFs into a queue (recommended) or with a document type only."
+          description="Filter the list below, or upload a PDF into a queue (recommended) or with a document type only."
           actions={
-            <>
-              <div className="space-y-1.5">
-                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Queue
-                </Label>
-                <Select value={queueId} onValueChange={setQueueId}>
-                  <SelectTrigger className="min-w-[220px]">
-                    <SelectValue placeholder="Optional queue" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="none">No queue</SelectItem>
-                    {activeQueues.map((q) => (
-                      <SelectItem key={q.id} value={q.id}>
-                        {q.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Document type
-                </Label>
-                <Select
-                  value={documentType}
-                  onValueChange={setDocumentType}
-                  disabled={Boolean(selectedQueue)}
-                >
-                  <SelectTrigger className="min-w-[240px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(typesQuery.data ?? [
-                      {
-                        documentType: 'PURCHASE_ORDER_CONFIRMATION',
-                        label: 'Purchase order',
-                        extractionSupported: true,
-                      },
-                    ]).map((t) => (
-                      <SelectItem key={t.documentType} value={t.documentType}>
-                        {t.label}
-                        {!t.extractionSupported ? ' (coming soon)' : ''}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <input
-                ref={inputRef}
-                type="file"
-                accept="application/pdf,.pdf"
-                className="hidden"
-                onChange={(e) => {
-                  const file = e.target.files?.[0];
-                  if (file) upload.mutate(file);
-                  e.target.value = '';
-                }}
-              />
-              <Button
-                disabled={upload.isPending}
-                onClick={() => inputRef.current?.click()}
-              >
-                <Upload className="h-4 w-4" aria-hidden />
-                {upload.isPending ? 'Uploading…' : 'Upload PDF'}
-              </Button>
-            </>
+            <Button onClick={openUploadDialog}>
+              <Upload className="h-4 w-4" aria-hidden />
+              Upload PDF
+            </Button>
           }
         />
-
-        {selectedType && !selectedType.extractionSupported && (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            Extraction for {selectedType.label} is not available yet. You can
-            still upload and configure fields in Settings.
-          </div>
-        )}
 
         {loadError && (
           <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
@@ -236,6 +230,37 @@ export default function DocumentsPage() {
                   className="pl-9"
                 />
               </div>
+              <Select value={filterQueueId} onValueChange={setFilterQueueId}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Queue" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All queues</SelectItem>
+                  <SelectItem value="none">No queue</SelectItem>
+                  {(queuesQuery.data ?? []).map((q) => (
+                    <SelectItem key={q.id} value={q.id}>
+                      {q.name}
+                      {!q.isActive ? ' (inactive)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={filterDocumentType}
+                onValueChange={setFilterDocumentType}
+              >
+                <SelectTrigger className="w-[220px]">
+                  <SelectValue placeholder="Document type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All document types</SelectItem>
+                  {documentTypes.map((t) => (
+                    <SelectItem key={t.documentType} value={t.documentType}>
+                      {t.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
                 <SelectTrigger className="w-[200px]">
                   <SelectValue placeholder="Status" />
@@ -266,15 +291,12 @@ export default function DocumentsPage() {
                 }
                 description={
                   data?.items?.length
-                    ? 'Try a different search or status filter.'
+                    ? 'Try a different search or filter.'
                     : 'Upload a PDF, or open Queues to work in a dedicated inbox.'
                 }
                 action={
                   !data?.items?.length ? (
-                    <Button
-                      disabled={upload.isPending}
-                      onClick={() => inputRef.current?.click()}
-                    >
+                    <Button onClick={openUploadDialog}>
                       <FileUp className="h-4 w-4" aria-hidden />
                       Upload PDF
                     </Button>
@@ -337,6 +359,125 @@ export default function DocumentsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Dialog
+        open={uploadOpen}
+        onOpenChange={(open) => {
+          if (upload.isPending) return;
+          setUploadOpen(open);
+          if (!open) setPendingFile(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Upload PDF</DialogTitle>
+            <DialogDescription>
+              Choose a queue (recommended) or document type, then select the
+              file.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Queue</Label>
+              <Select value={uploadQueueId} onValueChange={setUploadQueueId}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Optional queue" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">No queue</SelectItem>
+                  {activeQueues.map((q) => (
+                    <SelectItem key={q.id} value={q.id}>
+                      {q.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Document type</Label>
+              <Select
+                value={uploadDocumentType}
+                onValueChange={setUploadDocumentType}
+                disabled={Boolean(uploadSelectedQueue)}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {documentTypes.map((t) => (
+                    <SelectItem key={t.documentType} value={t.documentType}>
+                      {t.label}
+                      {!t.extractionSupported ? ' (coming soon)' : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {uploadSelectedQueue ? (
+                <p className="text-xs text-muted-foreground">
+                  Document type comes from the selected queue.
+                </p>
+              ) : null}
+            </div>
+
+            {uploadSelectedType && !uploadSelectedType.extractionSupported ? (
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+                Extraction for {uploadSelectedType.label} is not available yet.
+                You can still upload and configure fields in Settings.
+              </div>
+            ) : null}
+
+            <div className="space-y-1.5">
+              <Label>PDF file</Label>
+              <input
+                ref={inputRef}
+                type="file"
+                accept="application/pdf,.pdf"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0] ?? null;
+                  setPendingFile(file);
+                  e.target.value = '';
+                }}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={upload.isPending}
+                  onClick={() => inputRef.current?.click()}
+                >
+                  <FileUp className="h-4 w-4" aria-hidden />
+                  {pendingFile ? 'Change file' : 'Choose file'}
+                </Button>
+                <span className="min-w-0 truncate text-sm text-muted-foreground">
+                  {pendingFile?.name ?? 'No file selected'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={upload.isPending}
+              onClick={() => setUploadOpen(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              disabled={!pendingFile || upload.isPending}
+              onClick={submitUpload}
+            >
+              <Upload className="h-4 w-4" aria-hidden />
+              {upload.isPending ? 'Uploading…' : 'Upload'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </AppShell>
   );
 }

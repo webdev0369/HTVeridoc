@@ -1446,8 +1446,11 @@ export function PdfViewer({
     highlight!.page === activePageView!.page &&
     activePageView!.width > 0;
 
+  // Only float when the value is located on the PDF. Empty / not-found fields
+  // are edited in the sidebar (with a "Not found" hint) — no floating editor.
   const showFloat =
     Boolean(pickMode && highlight) &&
+    valueLocated &&
     Boolean(activePageView) &&
     highlight!.page === (activePageView?.page ?? highlight!.page);
 

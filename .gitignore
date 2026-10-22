@@ -5,10 +5,13 @@ out
 coverage
 .env
 .env.local
+.env.monolith
+.env.micro
 *.log
 .DS_Store
-# PDF / file data at repo root
+# PDF / file data (never commit uploaded originals)
 /storage/
+/apps/storage/
 *.tsbuildinfo
 .turbo
 .idea
