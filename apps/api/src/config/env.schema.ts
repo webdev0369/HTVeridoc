@@ -15,7 +15,10 @@ export const envSchema = z.object({
   STORAGE_ROOT: z.string().default('./storage/htveridoc'),
   MAX_UPLOAD_BYTES: z.coerce.number().default(26_214_400),
   CORS_ORIGIN: z.string().default('http://localhost:3000,http://localhost:8080'),
-  /** Public web origin for editor links in webhooks (defaults to CORS_ORIGIN). */
+  /**
+   * Single public web origin for /editor/<token> handoff links.
+   * Required in production (e.g. https://app.example.com). Defaults to http://localhost:3000.
+   */
   PUBLIC_WEB_URL: z.string().optional(),
   /** Public API base URL shown on Integration credentials (defaults to localhost:API_PORT). */
   PUBLIC_API_URL: z.string().optional(),

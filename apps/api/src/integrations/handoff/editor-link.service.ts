@@ -25,12 +25,11 @@ export class EditorLinkService {
     private readonly documentsRepo: Repository<Document>,
   ) {}
 
+  /** Single browser origin for /editor/<token> links (not CORS_ORIGIN — that may be a CSV). */
   private webOrigin(): string {
-    return (
-      this.config.get<string>('PUBLIC_WEB_URL') ||
-      this.config.get<string>('CORS_ORIGIN') ||
-      'http://localhost:3000,http://localhost:8080'
-    ).split(',').map((o) => o.trim()).join(',').replace(/\/$/, '');
+    const raw =
+      this.config.get<string>('PUBLIC_WEB_URL') || 'http://localhost:3000';
+    return raw.trim().replace(/\/$/, '');
   }
 
   /**

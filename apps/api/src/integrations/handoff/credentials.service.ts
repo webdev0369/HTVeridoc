@@ -49,11 +49,12 @@ export class CredentialsService {
       this.config.get<string>('PUBLIC_API_URL') ||
       `http://localhost:${apiPort}`
     ).replace(/\/$/, '');
+    // Single public web origin for credentials display (not CORS_ORIGIN CSV).
     const webOrigin = (
-      this.config.get<string>('PUBLIC_WEB_URL') ||
-      this.config.get<string>('CORS_ORIGIN') ||
-      'http://localhost:3000,http://localhost:8080'
-    ).split(',').map((o) => o.trim()).join(',').replace(/\/$/, '');
+      this.config.get<string>('PUBLIC_WEB_URL') || 'http://localhost:3000'
+    )
+      .trim()
+      .replace(/\/$/, '');
 
     const partnerEnvTemplate = [
       `# HTVeriDoc — partner backend env (server only, never put in FE)`,
