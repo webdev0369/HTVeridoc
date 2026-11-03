@@ -12,20 +12,20 @@ Docker is **not** required for local development. For a full stack deploy (API +
 
 ## Prerequisites
 
-- Node.js **20+** for this repo (other apps can stay on Node 16)
-- pnpm 9 (ships with nvm’s Node 20 install, or `corepack enable`)
+- Node.js **24+** for this repo (other apps can stay on Node 16 / 20)
+- pnpm 9 (ships with nvm’s Node 24 install, or `corepack enable`)
 - PostgreSQL 14+ running locally **or** Docker Desktop / Docker Engine
 - Redis optional for Phases 1–3 (BullMQ is registered but idle; required later for jobs)
 
-### Node 16 + Node 20 side by side (Windows nvm)
+### Node 16 + Node 24 side by side (Windows nvm)
 
 On Windows, `nvm use` changes Node **globally** (symlink under `C:\Program Files\nodejs`). That is why it feels like the whole system switches.
 
-For HTVeriDoc you do **not** need to leave Node 20 active:
+For HTVeriDoc you do **not** need to leave Node 24 active:
 
 ```bash
 # one-time
-nvm install 20
+nvm install 24
 
 # keep your default / other projects on 16 if you want:
 nvm use 16
@@ -36,10 +36,10 @@ node scripts/dev.js
 # Git Bash: bash dev.sh
 ```
 
-`pnpm` 9 refuses to start on Node 16, so do **not** type bare `pnpm dev` while your global Node is 16. Use `node scripts/dev.js` / `dev.cmd` instead — it re-execs under nvm’s Node 20 without `nvm use`.
+`pnpm` 9 refuses to start on Node 16, so do **not** type bare `pnpm dev` while your global Node is 16. Use `node scripts/dev.js` / `dev.cmd` instead — it re-execs under nvm’s Node 24 without `nvm use`.
 
-You should see `[dev] shell is v16...; re-exec under ...\v20.x.x`.  
-`.nvmrc` in this repo is `20`. Avoid `nvm use 20` while you are actively running a Node 16 FE elsewhere.
+You should see `[dev] shell is v16...; re-exec under ...\v24.x.x`.  
+`.nvmrc` in this repo is `24`. Avoid `nvm use 24` while you are actively running a Node 16 FE elsewhere.
 
 ## Setup
 
@@ -75,13 +75,21 @@ pnpm seed
 node scripts/dev.js
 # or:  dev.cmd   /   bash dev.sh
 
-# If your shell is already Node 20+, these also work:
+# If your shell is already Node 24+, these also work:
 pnpm dev:api   # http://localhost:3001
 pnpm dev:web   # http://localhost:3000.http://localhost:8080.
 pnpm dev       # runs node scripts/dev.js
 ```
 
-`dev.js` / `with-project-node.js` pin Node 20 for this repo only so Gemini (`@google/genai`) works without flipping global nvm.
+`dev.js` / `with-project-node.js` pin Node 24 for this repo only so Gemini (`@google/genai`) works without flipping global nvm.
+
+## CI (GitHub Actions)
+
+On push/PR to `main` and `micro-services`, `.github/workflows/ci.yml` runs:
+
+- `pnpm install --frozen-lockfile` (Node 24)
+- API unit + export tests
+- API build, web lint + build
 
 ## Deploy with Docker (full system)
 

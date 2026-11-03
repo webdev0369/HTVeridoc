@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main, micro-services]
+  pull_request:
+    branches: [main, micro-services]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: API unit tests
+        run: pnpm --filter @htveridoc/api test:units
+
+      - name: API export tests
+        run: pnpm --filter @htveridoc/api test:export
+
+      - name: Build API
+        run: pnpm --filter @htveridoc/api build
+
+      - name: Lint web
+        run: pnpm --filter @htveridoc/web lint
+
+      - name: Build web
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3001
+          NEXT_TELEMETRY_DISABLED: '1'
+        run: pnpm --filter @htveridoc/web build
